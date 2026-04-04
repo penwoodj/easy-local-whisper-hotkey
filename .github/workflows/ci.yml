@@ -1,0 +1,193 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  merge_group:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  repo-hygiene:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate required project files
+        run: |
+          required_files=(
+            README.md
+            LICENSE
+            CHANGELOG.md
+            pyproject.toml
+            packaging/systemd/whisper-hotkey.service
+            packaging/docker/Dockerfile
+            .github/workflows/ci.yml
+            .github/workflows/release.yml
+          )
+          for file in "${required_files[@]}"; do
+            if [[ ! -f "$file" ]]; then
+              echo "::error file=$file::Missing required file"
+              exit 1
+            fi
+          done
+
+      - name: Enforce changelog updates on shipping changes
+        if: github.event_name == 'pull_request'
+        run: |
+          git fetch origin "${{ github.base_ref }}" --depth=1
+          changed_files="$(git diff --name-only "origin/${{ github.base_ref }}"...HEAD)"
+          echo "$changed_files"
+          if echo "$changed_files" | grep -Eq '^(src/|packaging/|scripts/|pyproject.toml)'; then
+            if ! echo "$changed_files" | grep -qx 'CHANGELOG.md'; then
+              echo "::error::CHANGELOG.md must be updated when code, packaging, or release metadata changes."
+              exit 1
+            fi
+          fi
+
+      - name: Validate project version
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          namespace = {}
+          exec(Path("src/whisper_hotkey/__init__.py").read_text(encoding="utf-8"), namespace)
+          version = namespace["__version__"]
+          if not version or version.count(".") < 2:
+              raise SystemExit(f"Invalid __version__: {version!r}")
+          print(f"package.__version__={version}")
+          PY
+
+      - name: Write summary
+        run: |
+          {
+            echo "## Repo Hygiene"
+            echo
+            echo "- Required files: present"
+            echo "- Version metadata: valid"
+            if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+              echo "- Changelog discipline: enforced for shipping paths"
+            else
+              echo "- Changelog discipline: not applicable on this event"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install developer dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install .[dev]
+      - name: Ruff lint
+        run: ruff check .
+      - name: Ruff format check
+        run: ruff format --check .
+      - name: Mypy
+        run: mypy src
+      - name: Compile source tree
+        run: python -m compileall src
+
+  unit-tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+      - name: Run unit and integration tests
+        run: python -m unittest discover -s tests -t . -p 'test_*.py' -v
+
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install .[dev]
+      - name: Build distributions and release bundle
+        run: ./scripts/build_release_assets.sh
+      - name: Smoke test built package
+        run: |
+          python -m pip install --force-reinstall dist/*.whl
+          whisper-hotkey --version
+          whisper-hotkey print-config --json
+          whisper-hotkey doctor --json || true
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: package-artifacts
+          path: dist/*
+
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build container image
+        run: docker build -f packaging/docker/Dockerfile -t whisper-hotkey-ci .
+      - name: Smoke test container image
+        run: docker run --rm whisper-hotkey-ci --version
+
+  dependency-review:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/dependency-review-action@v4
+
+  review-summary:
+    if: always()
+    runs-on: ubuntu-latest
+    needs:
+      - repo-hygiene
+      - lint
+      - unit-tests
+      - package
+      - docker-build
+      - dependency-review
+    steps:
+      - name: Publish summary
+        run: |
+          {
+            echo "## Review Summary"
+            echo
+            echo "| Check | Result |"
+            echo "| --- | --- |"
+            echo "| Repo hygiene | ${{ needs.repo-hygiene.result }} |"
+            echo "| Lint | ${{ needs.lint.result }} |"
+            echo "| Tests | ${{ needs.unit-tests.result }} |"
+            echo "| Package build | ${{ needs.package.result }} |"
+            echo "| Docker build | ${{ needs.docker-build.result }} |"
+            echo "| Dependency review | ${{ needs.dependency-review.result }} |"
+            echo
+            echo "Package artifacts are uploaded from the \`package\` job when that job succeeds."
+          } >> "$GITHUB_STEP_SUMMARY"

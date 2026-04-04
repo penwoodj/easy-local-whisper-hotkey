@@ -1,0 +1,14 @@
+[Unit]
+Description=Whisper Hotkey Dictation Daemon
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+EnvironmentFile=-%h/.config/whisper-hotkey/whisper-hotkey.env
+ExecStart=%h/.local/bin/whisper-hotkey run
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=graphical-session.target
