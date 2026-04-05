@@ -1,6 +1,6 @@
-# whisper-hotkey
+# easy-local-whisper-hotkey
 
-`whisper-hotkey` is a local Linux desktop dictation tool for X11. It listens for `Ctrl+Space`, records from PipeWire or PulseAudio, transcribes with `whisper.cpp`, and types into the currently focused window.
+`easy-local-whisper-hotkey` is a local Linux desktop dictation tool for X11. It listens for `Ctrl+Space`, records from PipeWire or PulseAudio, transcribes with `whisper.cpp`, and types into the currently focused window.
 
 This repository turns the original single-machine script into a releasable product skeleton:
 
@@ -36,22 +36,22 @@ docs/                        Product, configuration, and release docs
 
 ## CLI
 
-The installed console entry point is `whisper-hotkey`.
+The installed console entry point is `easy-local-whisper-hotkey`.
 
 Common commands:
 
 ```bash
-whisper-hotkey run
-whisper-hotkey test --seconds 3
-whisper-hotkey list-sources
-whisper-hotkey print-config
-whisper-hotkey doctor
+easy-local-whisper-hotkey run
+easy-local-whisper-hotkey test --seconds 3
+easy-local-whisper-hotkey list-sources
+easy-local-whisper-hotkey print-config
+easy-local-whisper-hotkey doctor
 ```
 
 Backward-compatible direct flags still work:
 
 ```bash
-whisper-hotkey --test 3
+easy-local-whisper-hotkey --test 3
 ```
 
 ## Native Install
@@ -61,8 +61,8 @@ The intended release install path is:
 1. Install or build `whisper.cpp` and place `whisper-cli` on `PATH`, or point `WHISPER_CLI` to it.
 2. Install a GGML model, or point `WHISPER_MODEL` to it.
 3. Install the wheel with `pipx` or `pip --user`.
-4. Install the systemd user service from `packaging/systemd/whisper-hotkey.service`.
-5. Run `whisper-hotkey doctor` before enabling the service.
+4. Install the systemd user service from `packaging/systemd/easy-local-whisper-hotkey.service`.
+5. Run `easy-local-whisper-hotkey doctor` before enabling the service.
 
 Detailed steps are in [docs/install.md](docs/install.md).
 
