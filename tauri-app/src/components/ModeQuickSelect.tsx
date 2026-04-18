@@ -13,6 +13,18 @@ const MODES: { value: PostProcessingMode; emoji: string; label: string }[] = [
   { value: 'clarity', emoji: '💎', label: 'Clarity' },
 ];
 
+const MODE_DESCRIPTIONS: Record<string, string> = {
+  'off': 'No processing',
+  'light': 'Punctuation only',
+  'aggressive': 'Full grammar fix',
+  'agentic': 'AI-powered rewrite',
+  'writing': 'Prose optimization',
+  'code': 'Code formatting',
+  'structure': 'Text restructuring',
+  'persona': 'Tone adjustment',
+  'clarity': 'Readability boost',
+};
+
 interface ModeQuickSelectProps {
   currentMode: PostProcessingMode;
   onModeChange: (mode: PostProcessingMode) => void;
@@ -32,13 +44,20 @@ export function ModeQuickSelect({
         return (
           <Button
             key={mode.value}
-            variant={isActive ? 'default' : 'outline'}
+            variant="outline"
             onClick={() => onModeChange(mode.value)}
             disabled={disabled}
-            className="flex flex-col gap-1 h-14"
+            className={`
+              flex flex-col gap-1 h-auto py-3 transition-all
+              ${isActive
+                ? 'border-2 border-primary bg-transparent ring-2 ring-primary/30 shadow-md shadow-primary/20 text-primary'
+                : 'border border-border bg-card hover:bg-card/80 text-foreground hover:ring-2 hover:ring-primary/20 hover:border-primary/50'
+              }
+            `}
           >
             <span className="text-lg">{mode.emoji}</span>
             <span className="text-[10px] font-medium">{mode.label}</span>
+            <span className="text-[10px] text-muted-foreground">{MODE_DESCRIPTIONS[mode.value]}</span>
           </Button>
         );
       })}
