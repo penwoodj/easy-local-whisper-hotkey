@@ -20,7 +20,7 @@ const demoConfig: WhisperConfig = {
   suppress_nst: true,
   suppress_regex: '',
   log_file: '/tmp/whisper_hotkey.log',
-  voice_activation_mode: 'hold',
+  voice_activation_mode: 'toggle',
   indicator_enabled: true,
   post_processing_enabled: false,
   post_processing_mode: 'off',

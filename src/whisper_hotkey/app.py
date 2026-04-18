@@ -55,11 +55,14 @@ LOCK_MASK = 0x2
 MOD2_MASK = 0x10
 MOD5_MASK = 0x80
 SHIFT_MASK = 0x1
+MOD1_MASK = 0x8
 XK_SPACE = 0x20
 XK_CONTROL_L = 0xFFE3
 XK_CONTROL_R = 0xFFE4
 XK_SHIFT_L = 0xFFE1
 XK_SHIFT_R = 0xFFE2
+XK_ALT_L = 0xFFE9
+XK_ALT_R = 0xFFEA
 XK_M = 0x6D
 XK_NUM_LOCK = 0xFF7F
 
@@ -1114,6 +1117,25 @@ class X11HotkeyDaemon:
         self.libx11.XSync(self.display, 0)
         self.logger.log("Ctrl+Space key grab registered")
 
+        # Mode cycling: Ctrl+Shift+Alt+Space
+        mode_modifiers_base = CONTROL_MASK | SHIFT_MASK | MOD1_MASK
+        mode_modifier_variants = {mode_modifiers_base}
+        for extra_mask in (LOCK_MASK, self.numlock_mask, MOD2_MASK, MOD5_MASK):
+            if extra_mask:
+                mode_modifier_variants.update({mode_modifiers_base | extra_mask, mode_modifiers_base | LOCK_MASK | extra_mask})
+        for modifiers in mode_modifier_variants:
+            self.libx11.XGrabKey(
+                self.display,
+                int(self.space_keycode),
+                modifiers,
+                self.root,
+                0,
+                GRAB_MODE_ASYNC,
+                GRAB_MODE_ASYNC,
+            )
+        self.libx11.XSync(self.display, 0)
+        self.logger.log("Ctrl+Shift+Alt+Space mode cycling key grab registered")
+
     def ungrab(self) -> None:
         if not self.display:
             return
@@ -1248,8 +1270,8 @@ class X11HotkeyDaemon:
             if event.type != KEY_PRESS:
                 continue
 
-            if event.xkey.keycode == self.m_keycode and (event.xkey.state & (CONTROL_MASK | SHIFT_MASK)) == (CONTROL_MASK | SHIFT_MASK):
-                self.logger.log("Ctrl+Shift+M pressed; cycling post-processing mode")
+            if event.xkey.keycode == self.space_keycode and (event.xkey.state & (CONTROL_MASK | SHIFT_MASK | MOD1_MASK)) == (CONTROL_MASK | SHIFT_MASK | MOD1_MASK):
+                self.logger.log("Ctrl+Shift+Alt+Space pressed; cycling post-processing mode")
                 self._cycle_postprocess_mode()
                 self.drain_pending_events()
                 continue

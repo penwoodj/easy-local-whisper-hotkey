@@ -36,6 +36,80 @@ impl std::str::FromStr for LogLevel {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum VoiceActivationMode {
+    #[default]
+    Toggle,
+    Hold,
+}
+
+impl std::fmt::Display for VoiceActivationMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            VoiceActivationMode::Hold => write!(f, "hold"),
+            VoiceActivationMode::Toggle => write!(f, "toggle"),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum PostProcessingMode {
+    #[default]
+    Off,
+    Light,
+    Aggressive,
+    Agentic,
+    Writing,
+    Code,
+    Structure,
+    Persona,
+    Clarity,
+}
+
+impl std::fmt::Display for PostProcessingMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PostProcessingMode::Off => write!(f, "off"),
+            PostProcessingMode::Light => write!(f, "light"),
+            PostProcessingMode::Aggressive => write!(f, "aggressive"),
+            PostProcessingMode::Agentic => write!(f, "agentic"),
+            PostProcessingMode::Writing => write!(f, "writing"),
+            PostProcessingMode::Code => write!(f, "code"),
+            PostProcessingMode::Structure => write!(f, "structure"),
+            PostProcessingMode::Persona => write!(f, "persona"),
+            PostProcessingMode::Clarity => write!(f, "clarity"),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum PostProcessingTrigger {
+    #[default]
+    Always,
+    Manual,
+    #[serde(rename = "auto_long")]
+    AutoLong,
+    Preview,
+}
+
+impl std::fmt::Display for PostProcessingTrigger {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PostProcessingTrigger::Always => write!(f, "always"),
+            PostProcessingTrigger::Manual => write!(f, "manual"),
+            PostProcessingTrigger::AutoLong => write!(f, "auto_long"),
+            PostProcessingTrigger::Preview => write!(f, "preview"),
+        }
+    }
+}
+
+fn default_indicator_enabled() -> bool {
+    true
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct WhisperConfig {
     pub whisper_cli: String,
@@ -53,6 +127,16 @@ pub struct WhisperConfig {
     pub direct_streaming: bool,
     pub log_file: String,
     pub log_level: LogLevel,
+    #[serde(default)]
+    pub voice_activation_mode: VoiceActivationMode,
+    #[serde(default)]
+    pub post_processing_enabled: bool,
+    #[serde(default)]
+    pub post_processing_mode: PostProcessingMode,
+    #[serde(default)]
+    pub post_processing_trigger: PostProcessingTrigger,
+    #[serde(default = "default_indicator_enabled")]
+    pub indicator_enabled: bool,
 }
 
 impl Default for WhisperConfig {
@@ -80,6 +164,11 @@ impl Default for WhisperConfig {
             direct_streaming: false,
             log_file: "/tmp/whisper_hotkey.log".to_string(),
             log_level: LogLevel::Info,
+            voice_activation_mode: VoiceActivationMode::Toggle,
+            post_processing_enabled: false,
+            post_processing_mode: PostProcessingMode::Off,
+            post_processing_trigger: PostProcessingTrigger::Always,
+            indicator_enabled: true,
         }
     }
 }
@@ -219,6 +308,39 @@ fn load_config_from_env_file(path: &PathBuf) -> Result<WhisperConfig> {
                 "WHISPER_LOG_LEVEL" => {
                     config.log_level = value.parse().unwrap_or(LogLevel::Info);
                 }
+                "WHISPER_ACTIVATION_MODE" => {
+                    config.voice_activation_mode = match value {
+                        "hold" => VoiceActivationMode::Hold,
+                        _ => VoiceActivationMode::Toggle,
+                    };
+                }
+                "WHISPER_POST_PROCESSING_ENABLED" => {
+                    config.post_processing_enabled = value == "true" || value == "1";
+                }
+                "WHISPER_POST_PROCESSING_MODE" => {
+                    config.post_processing_mode = match value {
+                        "light" => PostProcessingMode::Light,
+                        "aggressive" => PostProcessingMode::Aggressive,
+                        "agentic" => PostProcessingMode::Agentic,
+                        "writing" => PostProcessingMode::Writing,
+                        "code" => PostProcessingMode::Code,
+                        "structure" => PostProcessingMode::Structure,
+                        "persona" => PostProcessingMode::Persona,
+                        "clarity" => PostProcessingMode::Clarity,
+                        _ => PostProcessingMode::Off,
+                    };
+                }
+                "WHISPER_POST_PROCESSING_TRIGGER" => {
+                    config.post_processing_trigger = match value {
+                        "manual" => PostProcessingTrigger::Manual,
+                        "auto_long" => PostProcessingTrigger::AutoLong,
+                        "preview" => PostProcessingTrigger::Preview,
+                        _ => PostProcessingTrigger::Always,
+                    };
+                }
+                "WHISPER_INDICATOR" => {
+                    config.indicator_enabled = value == "true" || value == "1";
+                }
                 _ => {}
             }
         }
@@ -271,6 +393,26 @@ fn save_config_to_env_file(path: &PathBuf, config: &WhisperConfig) -> Result<()>
     );
     updates.insert("WHISPER_LOG_FILE".into(), config.log_file.clone());
     updates.insert("WHISPER_LOG_LEVEL".into(), config.log_level.to_string());
+    updates.insert(
+        "WHISPER_ACTIVATION_MODE".into(),
+        config.voice_activation_mode.to_string(),
+    );
+    updates.insert(
+        "WHISPER_POST_PROCESSING_ENABLED".into(),
+        config.post_processing_enabled.to_string(),
+    );
+    updates.insert(
+        "WHISPER_POST_PROCESSING_MODE".into(),
+        config.post_processing_mode.to_string(),
+    );
+    updates.insert(
+        "WHISPER_POST_PROCESSING_TRIGGER".into(),
+        config.post_processing_trigger.to_string(),
+    );
+    updates.insert(
+        "WHISPER_INDICATOR".into(),
+        config.indicator_enabled.to_string(),
+    );
 
     if path.exists() {
         let existing = fs::read_to_string(path).context("Failed to read existing config")?;
@@ -349,6 +491,10 @@ pub fn start_daemon(app_handle: AppHandle) -> Result<(), String> {
         .env(
             "WHISPER_CONFIG_ENV_FILE",
             config_path.to_string_lossy().to_string(),
+        )
+        .env(
+            "DISPLAY",
+            env::var("DISPLAY").unwrap_or_else(|_| ":0".to_string()),
         )
         .spawn()
         .map_err(|e| format!("Failed to start daemon: {}", e))?;

@@ -220,7 +220,7 @@ function App() {
           <span>•</span>
           <span className="flex items-center gap-1">
             <kbd className="rounded border bg-muted px-1 py-0.5 font-mono text-[10px]">
-              Ctrl+Shift+S
+              Ctrl+Shift+Alt+Space
             </kbd>
             Modes
           </span>
