@@ -8,7 +8,6 @@ import { PostProcessingGrid } from './PostProcessingGrid';
 import { RulesManager } from './RulesManager';
 import type {
   WhisperConfig,
-  PostProcessingMode,
   PostProcessingTrigger,
   VoiceActivationMode,
 } from '../types/whisper';
@@ -84,7 +83,6 @@ export function ConfigurationPanel({ config, onConfigChange, disabled = false }:
               value={config.whisper_cli}
               onChange={(value) => updateConfig({ whisper_cli: value })}
               placeholder="Path to whisper-cli executable"
-              disabled={disabled}
             />
           </div>
           <div className="space-y-1">
@@ -314,7 +312,6 @@ export function ConfigurationPanel({ config, onConfigChange, disabled = false }:
               value={config.log_file}
               onChange={(value) => updateConfig({ log_file: value })}
               placeholder="Path to log file"
-              disabled={disabled}
             />
           </div>
         </div>
