@@ -85,7 +85,7 @@ function App() {
 
       <div className="flex-1 overflow-y-auto">
         {activeTab === 'status' && (
-          <div className="flex flex-col p-4 space-y-4">
+          <div className="scroll-container tab-content flex flex-col p-4 space-y-4">
             {error && (
               <Card className="border-destructive bg-destructive/10">
                 <CardContent className="p-3">
@@ -163,7 +163,7 @@ function App() {
         )}
 
         {activeTab === 'modes' && config && (
-          <div className="flex flex-col p-4 space-y-4">
+          <div className="scroll-container tab-content flex flex-col p-4 space-y-4">
             <ModeQuickSelect
               currentMode={config.post_processing_mode}
               onModeChange={(mode) =>
@@ -193,7 +193,7 @@ function App() {
         )}
 
         {activeTab === 'config' && config && (
-          <div className="flex flex-col p-4">
+          <div className="scroll-container tab-content flex flex-col p-4">
             <ConfigurationPanel
               config={config}
               onConfigChange={saveConfig}
