@@ -16,6 +16,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
+from .postprocessor import PostProcessor, PostProcessMode, PostProcessTrigger
+from .indicator import STATE_IDLE, STATE_RECORDING, STATE_PROCESSING
+
+try:
+    import numpy as np
+    from faster_whisper import WhisperModel
+    HAS_FASTER_WHISPER = True
+except ImportError:
+    HAS_FASTER_WHISPER = False
+
 
 HOME = Path.home()
 PACKAGE_NAME = "whisper-hotkey"
@@ -30,7 +40,7 @@ DEFAULT_PREFERRED_SOURCES = [
     DEFAULT_RAZER_SOURCE,
     DEFAULT_WEBCAM_SOURCE,
 ]
-RELEASE_GRACE_SECONDS = 0.75
+RELEASE_GRACE_SECONDS = 0.3
 
 SAMPLE_RATE = 16000
 CHANNELS = 1
@@ -38,15 +48,22 @@ SAMPLE_WIDTH = 2
 BYTES_PER_SECOND = SAMPLE_RATE * CHANNELS * SAMPLE_WIDTH
 
 KEY_PRESS = 2
+KEY_RELEASE = 3
 GRAB_MODE_ASYNC = 1
 CONTROL_MASK = 0x4
 LOCK_MASK = 0x2
 MOD2_MASK = 0x10
 MOD5_MASK = 0x80
+SHIFT_MASK = 0x1
 XK_SPACE = 0x20
 XK_CONTROL_L = 0xFFE3
 XK_CONTROL_R = 0xFFE4
+XK_SHIFT_L = 0xFFE1
+XK_SHIFT_R = 0xFFE2
+XK_M = 0x6D
 XK_NUM_LOCK = 0xFF7F
+
+_STRIP_PUNCT_RE = re.compile(r"[.,!?;:]")
 
 
 def shell_join(parts):
@@ -102,6 +119,9 @@ class SingleInstance:
             raise RuntimeError("another whisper daemon instance is already running") from None
         self.handle.write(f"{os.getpid()}\n")
         self.handle.flush()
+
+
+FOCUS_OUT = 10
 
 
 class XAnyEvent(ctypes.Structure):
@@ -177,12 +197,12 @@ def parse_args(argv: Sequence[str] | None = None):
     parser.add_argument(
         "--chunk-seconds",
         type=float,
-        default=float(os.environ.get("WHISPER_CHUNK_SECONDS", "1.8")),
+        default=float(os.environ.get("WHISPER_CHUNK_SECONDS", "3.5")),
     )
     parser.add_argument(
         "--overlap-seconds",
         type=float,
-        default=float(os.environ.get("WHISPER_OVERLAP_SECONDS", "0.4")),
+        default=float(os.environ.get("WHISPER_OVERLAP_SECONDS", "0.8")),
     )
     parser.add_argument(
         "--type-delay-ms",
@@ -192,6 +212,65 @@ def parse_args(argv: Sequence[str] | None = None):
     parser.add_argument(
         "--language",
         default=os.environ.get("WHISPER_LANGUAGE", "en"),
+    )
+    parser.add_argument(
+        "--suppress-regex",
+        default=os.environ.get("WHISPER_SUPPRESS_REGEX", "[,.]"),
+        help="Regex pattern to suppress specific tokens from whisper output.",
+    )
+    parser.add_argument(
+        "--suppress-nst",
+        action="store_true",
+        default=os.environ.get("WHISPER_SUPPRESS_NST", "true").lower() == "true",
+        help="Suppress non-speech tokens (sound effects, musical notes).",
+    )
+    parser.add_argument(
+        "--smart-punctuation",
+        action="store_true",
+        default=os.environ.get("WHISPER_SMART_PUNCTUATION", "true").lower() == "true",
+        help="Keep punctuation from explicit words (comma, period, etc.) while suppressing natural pauses.",
+    )
+    parser.add_argument(
+        "--symbol-words-to-symbols",
+        action="store_true",
+        default=os.environ.get("WHISPER_SYMBOL_WORDS_TO_SYMBOLS", "false").lower() == "true",
+        help="Convert spoken symbol names to actual symbols (comma → , period → .).",
+    )
+    parser.add_argument(
+        "--direct-streaming",
+        action="store_true",
+        default=os.environ.get("WHISPER_DIRECT_STREAMING", "false").lower() == "true",
+        help="Enable real-time text streaming as you speak.",
+    )
+    parser.add_argument(
+        "--activation-mode",
+        default=os.environ.get("WHISPER_ACTIVATION_MODE", "toggle"),
+        choices=["hold", "toggle"],
+        help="How to activate dictation: 'hold' (hold Ctrl+Space) or 'toggle' (press to start/stop).",
+    )
+    parser.add_argument(
+        "--indicator",
+        action="store_true",
+        default=os.environ.get("WHISPER_INDICATOR", "true").lower() == "true",
+        help="Show a cursor indicator when recording.",
+    )
+    parser.add_argument(
+        "--postprocess",
+        action="store_true",
+        default=os.environ.get("WHISPER_POSTPROCESS", "false").lower() == "true",
+        help="Enable grammar post-processing on toggle-off (default: false).",
+    )
+    parser.add_argument(
+        "--postprocess-mode",
+        default=os.environ.get("WHISPER_POSTPROCESS_MODE", "off"),
+        choices=["off", "light", "aggressive", "agentic", "writing", "code", "structure", "persona", "clarity"],
+        help="Post-processing mode (off, light, aggressive, agentic, writing, code, structure, persona, clarity).",
+    )
+    parser.add_argument(
+        "--postprocess-trigger",
+        default=os.environ.get("WHISPER_POSTPROCESS_TRIGGER", "manual"),
+        choices=["always", "manual", "auto-long", "preview"],
+        help="When to run post-processing (always, manual, auto-long, preview).",
     )
     parser.add_argument(
         "--log-file",
@@ -333,11 +412,11 @@ def compute_append_text(history_words, new_text: str) -> str:
     if not new_words:
         return ""
 
-    normalized_history = [normalize_token(word) for word in history_words[-24:]]
+    normalized_history = [normalize_token(word) for word in history_words[-32:]]
     normalized_new = [normalize_token(word) for word in new_words]
 
     best_overlap = 0
-    max_overlap = min(len(normalized_history), len(normalized_new), 12)
+    max_overlap = min(len(normalized_history), len(normalized_new), 10)
     for overlap in range(max_overlap, 0, -1):
         if normalized_history[-overlap:] == normalized_new[:overlap]:
             best_overlap = overlap
@@ -449,6 +528,13 @@ class Transcriber(threading.Thread):
         type_delay_ms: int,
         logger: Logger,
         live_type: bool = False,
+        suppress_regex: str = "",
+        suppress_nst: bool = True,
+        smart_punctuation: bool = True,
+        symbol_words_to_symbols: bool = False,
+        direct_streaming: bool = False,
+        faster_whisper_model: WhisperModel | None = None,
+        on_text_typed: Callable[[str], None] | None = None,
     ):
         super().__init__(daemon=True)
         self.recorder = recorder
@@ -458,10 +544,20 @@ class Transcriber(threading.Thread):
         self.type_delay_ms = type_delay_ms
         self.logger = logger
         self.live_type = live_type
-        self.jobs = queue.Queue()
+        self.suppress_regex = suppress_regex
+        self.suppress_nst = suppress_nst
+        self.smart_punctuation = smart_punctuation
+        self.symbol_words_to_symbols = symbol_words_to_symbols
+        self.direct_streaming = direct_streaming
+        self._fw_model = faster_whisper_model
+        self._on_text_typed = on_text_typed
+        self.jobs = queue.Queue(maxsize=8)
         self.history_words = []
         self.pending_fragments = []
         self.pending_lock = threading.Lock()
+        self.typed_text = ""
+        self.typed_lock = threading.Lock()
+        self._needs_leading_space = False
 
     def enqueue(self, job: SegmentJob) -> None:
         self.jobs.put(job)
@@ -492,6 +588,65 @@ class Transcriber(threading.Thread):
             self.logger.log(f"Skipping tiny segment {job.index}: {len(pcm_data)} bytes")
             return
 
+        if self._fw_model is not None:
+            self._process_faster_whisper(job, pcm_data)
+            return
+
+        self._process_cli_fallback(job, pcm_data)
+
+    def _process_faster_whisper(self, job: SegmentJob, pcm_data: bytes) -> None:
+        audio_array = np.frombuffer(pcm_data, dtype=np.int16).astype(np.float32) / 32768.0
+
+        self.logger.log(f"Transcribing segment {job.index} with faster-whisper")
+        try:
+            segments, info = self._fw_model.transcribe(
+                audio_array,
+                vad_filter=True,
+                vad_parameters=dict(threshold=0.5, min_speech_duration_ms=250, min_silence_duration_ms=500),
+                word_timestamps=True,
+                no_speech_threshold=0.7,
+                compression_ratio_threshold=2.2,
+                language=self.language,
+            )
+        except Exception as exc:
+            self.logger.log(f"Segment {job.index}: faster-whisper transcribe failed: {exc}")
+            return
+
+        transcript_parts = []
+        for segment in segments:
+            if hasattr(segment, 'no_speech_prob') and segment.no_speech_prob > 0.7:
+                continue
+            if segment.text:
+                transcript_parts.append(segment.text)
+
+        transcript = " ".join(transcript_parts).strip()
+        # Strip whisper-added punctuation (user says "period" for symbols)
+        transcript = _STRIP_PUNCT_RE.sub("", transcript)
+        self.logger.log(f"Segment {job.index} final={job.final} text={transcript!r}")
+
+        if not transcript:
+            return
+
+        if self._is_silence_hallucination(transcript):
+            self.logger.log(f"Segment {job.index}: filtered filler/hallucination")
+            return
+
+        append_text = compute_append_text(self.history_words, transcript)
+        if not append_text:
+            self.logger.log(f"Segment {job.index}: fully deduped, transcript was {transcript!r}, history tail={self.history_words[-6:]}")
+            return
+
+        if self.live_type or self.direct_streaming:
+            self._type_text(append_text)
+        else:
+            self.logger.log(f"Buffered text chunk: {append_text!r}")
+            with self.pending_lock:
+                self.pending_fragments.append(append_text)
+        self.history_words.extend(append_text.split())
+        if len(self.history_words) > 64:
+            self.history_words = self.history_words[-64:]
+
+    def _process_cli_fallback(self, job: SegmentJob, pcm_data: bytes) -> None:
         wav_fd, wav_path = tempfile.mkstemp(prefix=f"whisper_chunk_{job.index:03d}_", suffix=".wav")
         os.close(wav_fd)
         wav_file = Path(wav_path)
@@ -513,13 +668,26 @@ class Transcriber(threading.Thread):
                 "-l",
                 self.language,
             ]
+            if self.suppress_regex:
+                command.extend(["--suppress-regex", self.suppress_regex])
+            if self.suppress_nst:
+                command.append("--suppress-nst")
+            command.extend(["--no-speech-thold", "0.8"])
+            command.extend(["--best-of", "8"])
+            command.extend(["--entropy-thold", "2.8"])
+            command.extend(["--max-context", "64"])
             self.logger.log(f"Transcribing segment {job.index}: {shell_join(command)}")
-            result = subprocess.run(
-                command,
-                check=False,
-                capture_output=True,
-                text=True,
-            )
+            try:
+                result = subprocess.run(
+                    command,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+            except subprocess.TimeoutExpired:
+                self.logger.log(f"Segment {job.index}: whisper-cli timed out after 30s")
+                return
             transcript = clean_transcript((result.stdout or "") + "\n" + (result.stderr or ""))
             self.logger.log(
                 f"Segment {job.index} exit={result.returncode} final={job.final} text={transcript!r}"
@@ -527,11 +695,20 @@ class Transcriber(threading.Thread):
             if result.returncode != 0 or not transcript:
                 return
 
-            append_text = compute_append_text(self.history_words, transcript)
-            if not append_text:
+            if self._is_silence_hallucination(transcript):
+                self.logger.log(f"Segment {job.index}: filtered silence hallucination")
                 return
 
-            if self.live_type:
+            if self._is_repetitive_hallucination(transcript):
+                self.logger.log(f"Segment {job.index}: filtered repetitive hallucination")
+                return
+
+            append_text = compute_append_text(self.history_words, transcript)
+            if not append_text:
+                self.logger.log(f"Segment {job.index}: fully deduped, transcript={transcript!r}, history tail={self.history_words[-6:]}")
+                return
+
+            if self.live_type or self.direct_streaming:
                 self._type_text(append_text)
             else:
                 self.logger.log(f"Buffered text chunk: {append_text!r}")
@@ -546,8 +723,73 @@ class Transcriber(threading.Thread):
             except FileNotFoundError:
                 pass
 
+    def _deduplicate_text(self, new_text: str, already_typed: str) -> str:
+        """Remove leading overlap with already_typed in streaming mode"""
+        if not already_typed:
+            return new_text
+
+        new_words = new_text.split()
+        already_words = already_typed.split()
+        if not new_words:
+            return ""
+
+        tail = already_words[-12:] if len(already_words) >= 12 else already_words
+        max_check = min(len(tail), len(new_words), 8)
+
+        best_overlap = 0
+        for overlap in range(max_check, 0, -1):
+            match = all(
+                tail[-overlap + j].lower() == new_words[j].lower()
+                for j in range(overlap)
+            )
+            if match:
+                best_overlap = overlap
+                break
+
+        if best_overlap > 0:
+            self.logger.log(f"Dedup: stripped {best_overlap} overlapping words from {new_words[:best_overlap]!r}")
+        return " ".join(new_words[best_overlap:])
+
     def _type_text(self, text: str) -> None:
-        payload = text if text.endswith(" ") else f"{text} "
+        if not text:
+            return
+
+        processed_text = text.strip()
+        processed_text = self._strip_non_speech_tokens(processed_text)
+        if not processed_text:
+            return
+
+        if self._is_repetitive_hallucination(processed_text):
+            self.logger.log(f"Suppressed repetitive hallucination: {processed_text[:80]!r}")
+            return
+
+        if self.direct_streaming:
+            processed_text = self._fix_double_words(processed_text)
+            processed_text = self._remove_ellipses(processed_text)
+            processed_text = self._symbol_word_to_symbol(processed_text)
+
+            with self.typed_lock:
+                already_typed = self.typed_text
+                processed_text = self._deduplicate_text(processed_text, already_typed)
+                self.typed_text += " " + processed_text
+
+            if not processed_text:
+                return
+        else:
+            processed_text = self._process_smart_punctuation(processed_text)
+            processed_text = self._fix_double_words(processed_text)
+            processed_text = self._remove_ellipses(processed_text)
+            processed_text = self._symbol_word_to_symbol(processed_text)
+
+        payload = processed_text.rstrip()
+        if not payload:
+            return
+
+        if self._needs_leading_space and not payload.startswith((" ", "\n")):
+            if not payload[0:1] in ".,;:?!-":
+                payload = " " + payload
+        self._needs_leading_space = True
+
         command = [
             "xdotool",
             "type",
@@ -558,9 +800,150 @@ class Transcriber(threading.Thread):
             "-",
         ]
         self.logger.log(f"Typing text: {payload!r}")
-        result = subprocess.run(command, input=payload, text=True, capture_output=True, check=False)
+        try:
+            result = subprocess.run(command, input=payload, text=True, capture_output=True, check=False, timeout=10)
+        except subprocess.TimeoutExpired:
+            self.logger.log(f"xdotool timed out after 10s for payload: {payload!r}")
+            return
         if result.returncode != 0:
             self.logger.log(f"xdotool exit={result.returncode} stderr={result.stderr.strip()!r}")
+        else:
+            if self._on_text_typed:
+                self._on_text_typed(payload)
+
+    def _is_punctuation_word(self, word: str) -> bool:
+        punctuation_words = {
+            "comma", "period", "dot", "point", "question",
+            "question mark", "exclamation", "exclamation mark",
+            "colon", "semicolon", "hyphen", "dash",
+        }
+        return word.lower() in punctuation_words
+
+    _STRIP_TRAILING_PUNCT = re.compile(r"[,.?!;:]+$")
+    _SYMBOL_FOLLOW_WORDS = frozenset({"mark", "marks"})
+
+    def _symbol_word_to_symbol(self, text: str) -> str:
+        if not self.symbol_words_to_symbols:
+            return text
+        symbol_map = {
+            "comma": ",", "period": ".", "dot": ".", "point": ".",
+            "question mark": "?", "question": "?",
+            "exclamation mark": "!", "exclamation": "!",
+            "colon": ":", "semicolon": ";",
+            "hyphen": "-", "dash": "-",
+            "pew": ".", "pearl": ".", "pear": ".", "peer": ".",
+            "pier": ".", "pur": ".", "pure": ".",
+            "coma": ",", "karma": ",", "comer": ",",
+            "semi colon": ";", "semi": ";",
+        }
+        raw_words = text.split()
+        words = [self._STRIP_TRAILING_PUNCT.sub("", w) for w in raw_words]
+        result = []
+        i = 0
+        while i < len(words):
+            w = words[i]
+            if not w:
+                i += 1
+                continue
+            lower_word = w.lower()
+            two_word = f"{lower_word} {words[i + 1].lower()}" if i + 1 < len(words) else ""
+            if two_word in symbol_map:
+                symbol = symbol_map[two_word]
+                if result:
+                    result[-1] = result[-1] + symbol
+                else:
+                    result.append(symbol)
+                i += 2
+            elif lower_word in symbol_map:
+                symbol = symbol_map[lower_word]
+                if result:
+                    result[-1] = result[-1] + symbol
+                else:
+                    result.append(symbol)
+                i += 1
+            else:
+                result.append(raw_words[i])
+                i += 1
+        return " ".join(result)
+
+    def _process_smart_punctuation(self, text: str) -> str:
+        if not self.smart_punctuation:
+            return text
+        words = text.split()
+        result = []
+        i = 0
+        while i < len(words):
+            word = words[i]
+            if self._is_punctuation_word(word):
+                result.append(word)
+                i += 1
+                continue
+            if word in ",.!?;:":
+                if i + 1 < len(words):
+                    next_word = words[i + 1]
+                    if not self._is_punctuation_word(next_word) and next_word not in ",.!?;:":
+                        i += 1
+                        continue
+                result.append(word)
+                i += 1
+            else:
+                result.append(word)
+                i += 1
+        return " ".join(result)
+
+    def _fix_double_words(self, text: str) -> str:
+        result = re.sub(r"\bellipsis\b", "ellipses", text, flags=re.IGNORECASE)
+        result = re.sub(r"\blip-sync\w+", "lip-sync", result, flags=re.IGNORECASE)
+        result = re.sub(r"\bthe the\b", "the", result, flags=re.IGNORECASE)
+        result = re.sub(r"\ba a\b", "a", result, flags=re.IGNORECASE)
+        return result
+
+    def _remove_ellipses(self, text: str) -> str:
+        result = re.sub(r"\.{2,}", "", text)
+        return result.strip()
+
+    _NON_SPEECH_PATTERN = re.compile(r"[♪♩♫♬♭♮♯\u266a-\u266f\u2669]+")
+
+    def _strip_non_speech_tokens(self, text: str) -> str:
+        result = self._NON_SPEECH_PATTERN.sub("", text)
+        return result.strip()
+
+    _SILENCE_HALLUCINATION_WORDS = frozenset({
+        "you", "yeah", "uh", "um", "mm", "hmm", "mmm", "hm",
+        "shh", "shh!", "shh.", "hmm!", "hmm.",
+    })
+
+    _SILENCE_HALLUCINATION_PHRASES = [
+        "thank you for watching",
+        "thank you for listening",
+        "thank you very much",
+        "subscribe to my channel",
+        "like and subscribe",
+        "please subscribe",
+    ]
+
+    def _is_silence_hallucination(self, text: str) -> bool:
+        stripped = text.lower().strip()
+        words = stripped.split()
+        if len(words) > 6:
+            return False
+        if any(p in stripped for p in self._SILENCE_HALLUCINATION_PHRASES):
+            return True
+        if len(words) <= 2:
+            return all(w in self._SILENCE_HALLUCINATION_WORDS for w in words)
+        return False
+
+    def _is_repetitive_hallucination(self, text: str) -> bool:
+        words = text.lower().split()
+        if len(words) < 8:
+            return False
+        for phrase_len in range(3, min(12, len(words) // 3) + 1):
+            for start in range(min(4, len(words) - phrase_len * 3)):
+                phrase = " ".join(words[start:start + phrase_len])
+                count = text.lower().count(phrase)
+                if count >= 3:
+                    return True
+        return False
 
 
 class X11HotkeyDaemon:
@@ -574,6 +957,17 @@ class X11HotkeyDaemon:
         overlap_seconds: float,
         type_delay_ms: int,
         logger: Logger,
+        suppress_regex: str = "",
+        suppress_nst: bool = True,
+        smart_punctuation: bool = True,
+        symbol_words_to_symbols: bool = False,
+        direct_streaming: bool = False,
+        activation_mode: str = "hold",
+        indicator: bool = True,
+        faster_whisper_model: WhisperModel | None = None,
+        postprocess_enabled: bool = False,
+        postprocess_mode: str = "off",
+        postprocess_trigger: str = "manual",
     ):
         self.source = source
         self.whisper_cli = whisper_cli
@@ -583,15 +977,35 @@ class X11HotkeyDaemon:
         self.overlap_bytes = max(0, int(overlap_seconds * BYTES_PER_SECOND))
         self.type_delay_ms = type_delay_ms
         self.logger = logger
+        self.suppress_regex = suppress_regex
+        self.suppress_nst = suppress_nst
+        self.smart_punctuation = smart_punctuation
+        self.symbol_words_to_symbols = symbol_words_to_symbols
+        self.direct_streaming = direct_streaming
+        self.activation_mode = activation_mode
+        self.indicator = indicator
+        self._fw_model = faster_whisper_model
+        self._postprocessing_enabled = postprocess_enabled
+        self._postprocessing_mode = postprocess_mode if postprocess_mode != "off" else "off"
+        self._postprocessing_trigger = postprocess_trigger
         self.running = True
+        self.recording_active = False
         self.display = None
         self.root = None
         self.space_keycode = None
         self.control_left_keycode = None
         self.control_right_keycode = None
+        self.shift_left_keycode = None
+        self.shift_right_keycode = None
+        self.m_keycode = None
         self.numlock_mask = 0
         self.libx11 = ctypes.cdll.LoadLibrary("libX11.so.6")
         self._setup_xlib()
+        self._session_text = ""
+        self._postprocessor = PostProcessor(
+            mode=PostProcessMode(postprocess_mode),
+            trigger=PostProcessTrigger(postprocess_trigger),
+        )
 
     def _setup_xlib(self) -> None:
         self.libx11.XOpenDisplay.argtypes = [ctypes.c_char_p]
@@ -638,10 +1052,27 @@ class X11HotkeyDaemon:
         self.space_keycode = self.libx11.XKeysymToKeycode(self.display, XK_SPACE)
         self.control_left_keycode = self.libx11.XKeysymToKeycode(self.display, XK_CONTROL_L)
         self.control_right_keycode = self.libx11.XKeysymToKeycode(self.display, XK_CONTROL_R)
+        self.shift_left_keycode = self.libx11.XKeysymToKeycode(self.display, XK_SHIFT_L)
+        self.shift_right_keycode = self.libx11.XKeysymToKeycode(self.display, XK_SHIFT_R)
+        self.m_keycode = self.libx11.XKeysymToKeycode(self.display, XK_M)
         self.numlock_mask = self._detect_numlock_mask()
         self.logger.log(
             f"Connected to X11 display={display_name} space={self.space_keycode} ctrl_l={self.control_left_keycode} ctrl_r={self.control_right_keycode} numlock_mask={self.numlock_mask:#x}"
         )
+
+        self._indicator = None
+        if self.indicator:
+            try:
+                from whisper_hotkey.indicator import CursorIndicator
+                self._indicator = CursorIndicator(
+                    libx11=self.libx11,
+                    display=self.display,
+                    root_window=self.root,
+                    logger=self.logger,
+                )
+            except Exception as exc:
+                self.logger.log(f"CursorIndicator init failed: {exc}")
+                self._indicator = None
 
     def _detect_numlock_mask(self) -> int:
         class XModifierKeymap(ctypes.Structure):
@@ -696,6 +1127,9 @@ class X11HotkeyDaemon:
 
     def close(self) -> None:
         if self.display:
+            if self._indicator:
+                self._indicator.destroy()
+                self._indicator = None
             self.ungrab()
             self.libx11.XCloseDisplay(self.display)
             self.display = None
@@ -715,6 +1149,69 @@ class X11HotkeyDaemon:
         control_down = is_pressed(self.control_left_keycode) or is_pressed(self.control_right_keycode)
         return space_down and control_down
 
+    def _on_text_typed(self, text: str) -> None:
+        if not self._postprocessing_enabled:
+            return
+        self._session_text += "  " + text
+
+    def _reset_session_text(self) -> None:
+        self._session_text = ""
+
+    def _run_postprocessing(self) -> None:
+        if not self._postprocessing_enabled or not self._session_text.strip():
+            return
+
+        if not self._postprocessor.should_process(self._session_text):
+            return
+
+        self.logger.log(f"Running post-processing on session text ({len(self._session_text)} chars): {self._postprocessing_mode}")
+
+        processed = self._postprocessor.process(self._session_text)
+
+        if processed != self._session_text:
+            self.logger.log(f"Post-processing complete. Diff: {processed[:50]}...")
+            subprocess.run(["xdotool", "type", processed], check=True)
+        else:
+            self.logger.log("Post-processing: no changes made")
+
+    def _cycle_postprocess_mode(self) -> None:
+        modes = [
+            PostProcessMode.OFF,
+            PostProcessMode.LIGHT,
+            PostProcessMode.AGGRESSIVE,
+            PostProcessMode.AGENTIC,
+            PostProcessMode.WRITING,
+            PostProcessMode.CODE,
+            PostProcessMode.STRUCTURE,
+            PostProcessMode.PERSONA,
+            PostProcessMode.CLARITY,
+        ]
+
+        try:
+            current_index = modes.index(self._postprocessor.mode)
+            new_index = (current_index + 1) % len(modes)
+        except ValueError:
+            new_index = 0
+
+        new_mode = modes[new_index]
+        self._postprocessor = PostProcessor(
+            mode=new_mode,
+            trigger=self._postprocessor.trigger,
+        )
+        self._postprocessing_mode = new_mode.value
+        self.logger.log(f"Post-processing mode changed: {new_mode.value}")
+
+        toast_text = f"Grammar mode: {new_mode.value}"
+        try:
+            subprocess.run(
+                ["notify-send", "Whisper Hotkey", toast_text],
+                check=True,
+                capture_output=True,
+                timeout=5,
+            )
+        except Exception:
+            print(f"[{toast_text}]")
+
     def drain_pending_events(self) -> None:
         event = XEvent()
         while self.libx11.XPending(self.display) > 0:
@@ -723,11 +1220,12 @@ class X11HotkeyDaemon:
     def run(self) -> None:
         self.open()
         self.grab()
-        print("Whisper Ctrl+Space daemon is listening. Keep this running and hold Ctrl+Space to dictate.")
+        mode_label = "toggle" if self.activation_mode == "toggle" else "hold"
+        print(f"Whisper Ctrl+Space daemon is listening. Mode: {mode_label}.")
         print(f"Model: {self.model}")
         print(f"Source: {self.source}")
         print(f"Log: {self.logger.path}")
-        self.logger.log(f"Daemon ready with model={self.model} source={self.source}")
+        self.logger.log(f"Daemon ready mode={mode_label} model={self.model} source={self.source}")
 
         event = XEvent()
         while self.running:
@@ -738,16 +1236,131 @@ class X11HotkeyDaemon:
             self.libx11.XNextEvent(self.display, ctypes.byref(event))
             if not self.running:
                 break
+
+            if event.type == FOCUS_OUT and self.recording_active:
+                self.logger.log("FocusOut detected; stopping recording")
+                if self.activation_mode == "toggle":
+                    self.handle_toggle_session()
+                else:
+                    self.handle_hold_release()
+                continue
+
             if event.type != KEY_PRESS:
                 continue
+
+            if event.xkey.keycode == self.m_keycode and (event.xkey.state & (CONTROL_MASK | SHIFT_MASK)) == (CONTROL_MASK | SHIFT_MASK):
+                self.logger.log("Ctrl+Shift+M pressed; cycling post-processing mode")
+                self._cycle_postprocess_mode()
+                self.drain_pending_events()
+                continue
+
             if event.xkey.keycode != self.space_keycode:
                 continue
             if (event.xkey.state & CONTROL_MASK) == 0:
                 continue
 
-            self.logger.log("Ctrl+Space pressed; starting hold session")
-            self.handle_hold_session()
+            if self.activation_mode == "toggle":
+                if self.recording_active:
+                    self.logger.log("Ctrl+Space pressed; stopping toggle session")
+                else:
+                    self.logger.log("Ctrl+Space pressed; starting toggle session")
+                self.handle_toggle_session()
+            else:
+                self.logger.log("Ctrl+Space pressed; starting hold session")
+                self.handle_hold_session()
             self.drain_pending_events()
+
+    def handle_toggle_session(self) -> None:
+        if self.recording_active:
+            self.recording_active = False
+            if self._indicator:
+                self._indicator.hide()
+                self._indicator.set_state(STATE_IDLE)
+            if hasattr(self, "_recorder") and self._recorder:
+                time.sleep(0.5)
+                self._recorder.stop()
+                available = self._recorder.available()
+                final_start = max(0, available - self.chunk_bytes)
+                if available > final_start:
+                    self._transcriber.enqueue(
+                        SegmentJob(index=self._segment_index, start=final_start, end=available, final=True)
+                    )
+                self._transcriber.finish()
+                self._transcriber.join()
+                self._transcriber.flush_pending_text()
+                self._run_postprocessing()
+                self._recorder.cleanup()
+                self.logger.log("Toggle session stopped; text flushed")
+                print("Recording stopped.")
+                self._recorder = None
+                self._transcriber = None
+            return
+
+        self.recording_active = True
+        self._recorder = Recorder(self.source, self.logger)
+        self._transcriber = Transcriber(
+            recorder=self._recorder,
+            whisper_cli=self.whisper_cli,
+            model=self.model,
+            language=self.language,
+            type_delay_ms=self.type_delay_ms,
+            logger=self.logger,
+            suppress_regex=self.suppress_regex,
+            suppress_nst=self.suppress_nst,
+            smart_punctuation=self.smart_punctuation,
+            symbol_words_to_symbols=self.symbol_words_to_symbols,
+            direct_streaming=self.direct_streaming,
+            faster_whisper_model=self._fw_model,
+            on_text_typed=self._on_text_typed,
+        )
+        self._next_chunk_end = self.chunk_bytes
+        self._segment_index = 0
+        self._reset_session_text()
+        self._recorder.start()
+        self._transcriber.start()
+        if self._indicator:
+            self._indicator.set_state(STATE_RECORDING)
+            self._indicator.show()
+        print("Recording... press Ctrl+Space again to stop.")
+
+        while self.running and self.recording_active:
+            event = XEvent()
+            while self.libx11.XPending(self.display) > 0:
+                self.libx11.XNextEvent(self.display, ctypes.byref(event))
+                if event.type == KEY_PRESS and event.xkey.keycode == self.space_keycode:
+                    if (event.xkey.state & CONTROL_MASK) != 0:
+                        self.logger.log("Ctrl+Space pressed; toggling off")
+                        self.recording_active = False
+                        break
+
+            available = self._recorder.available()
+            while available >= self._next_chunk_end:
+                start = max(0, self._next_chunk_end - self.chunk_bytes - self.overlap_bytes)
+                self._transcriber.enqueue(
+                    SegmentJob(index=self._segment_index, start=start, end=self._next_chunk_end, final=False)
+                )
+                self._segment_index += 1
+                self._next_chunk_end += self.chunk_bytes
+            if self._indicator:
+                self._indicator.tick()
+            time.sleep(0.05)
+
+        # Always hide indicator and stop recording when loop exits
+        self.recording_active = False
+        if self._indicator:
+            self._indicator.hide()
+            self._indicator.set_state(STATE_IDLE)
+
+        # Trailing buffer: wait 500ms to capture last words
+        time.sleep(0.5)
+        # Enqueue final segment with whatever audio remains
+        available = self._recorder.available()
+        if available > int(BYTES_PER_SECOND * 0.25):
+            start = max(0, self._next_chunk_end - self.chunk_bytes - self.overlap_bytes)
+            self._transcriber.enqueue(
+                SegmentJob(index=self._segment_index, start=start, end=available, final=True)
+            )
+            self.logger.log(f"Final segment {self._segment_index} queued: {start}-{available}")
 
     def handle_hold_session(self) -> None:
         recorder = Recorder(self.source, self.logger)
@@ -758,21 +1371,59 @@ class X11HotkeyDaemon:
             language=self.language,
             type_delay_ms=self.type_delay_ms,
             logger=self.logger,
+            suppress_regex=self.suppress_regex,
+            suppress_nst=self.suppress_nst,
+            smart_punctuation=self.smart_punctuation,
+            symbol_words_to_symbols=self.symbol_words_to_symbols,
+            direct_streaming=self.direct_streaming,
+            faster_whisper_model=self._fw_model,
+            on_text_typed=self._on_text_typed,
         )
 
         next_chunk_end = self.chunk_bytes
         segment_index = 0
+        self._reset_session_text()
         recorder.start()
         transcriber.start()
+        if self._indicator:
+            self._indicator.set_state(STATE_RECORDING)
+            self._indicator.show()
         session_start = time.monotonic()
         released_since = None
         print("Recording... release Ctrl+Space to stop.")
 
         try:
-            while self.running:
-                if self.is_hotkey_held():
-                    released_since = None
-                else:
+            key_released = False
+            while self.running and not key_released:
+                # Use event-driven KeyRelease detection instead of XQueryKeymap.
+                # xdotool keystrokes during streaming cause XQueryKeymap to
+                # report grab key as released even while physically held.
+                released_since = None
+                event = XEvent()
+                while self.libx11.XPending(self.display) > 0:
+                    self.libx11.XNextEvent(self.display, ctypes.byref(event))
+                    if event.type == FOCUS_OUT:
+                        self.logger.log("FocusOut detected during hold session; stopping")
+                        key_released = True
+                        break
+                    if event.type == KEY_RELEASE:
+                        if (event.xkey.keycode == self.space_keycode
+                                or event.xkey.keycode == self.control_left_keycode
+                                or event.xkey.keycode == self.control_right_keycode):
+                            if released_since is None:
+                                released_since = time.monotonic()
+                            elif time.monotonic() - released_since >= RELEASE_GRACE_SECONDS:
+                                key_released = True
+                                break
+                    elif event.type == KEY_PRESS:
+                        if (event.xkey.keycode == self.space_keycode
+                                and (event.xkey.state & CONTROL_MASK) != 0):
+                            released_since = None
+                if key_released:
+                    break
+
+                # XQueryKeymap fallback: only when the X queue is empty
+                if not self.is_hotkey_held():
                     if released_since is None:
                         released_since = time.monotonic()
                     elif time.monotonic() - released_since >= RELEASE_GRACE_SECONDS:
@@ -786,6 +1437,8 @@ class X11HotkeyDaemon:
                     )
                     segment_index += 1
                     next_chunk_end += self.chunk_bytes
+                if self._indicator:
+                    self._indicator.tick()
                 time.sleep(0.05)
 
             recorder.stop()
@@ -800,8 +1453,12 @@ class X11HotkeyDaemon:
             # Delay text injection until after release; typing during the hold can
             # interfere with the pressed-state check for Ctrl+Space.
             transcriber.flush_pending_text()
+            if self._indicator:
+                self._indicator.hide()
+                self._indicator.set_state(STATE_IDLE)
             session_duration = time.monotonic() - session_start
             self.logger.log(f"Hold session finished after {session_duration:.2f}s")
+            self._run_postprocessing()
             print("Ready for the next Ctrl+Space hold.")
         finally:
             recorder.cleanup()
@@ -815,6 +1472,12 @@ def run_once(
     language: str,
     type_delay_ms: int,
     logger: Logger,
+    suppress_regex: str = "",
+    suppress_nst: bool = True,
+    smart_punctuation: bool = True,
+    symbol_words_to_symbols: bool = False,
+    direct_streaming: bool = False,
+    faster_whisper_model: WhisperModel | None = None,
 ) -> int:
     logger.log(f"Running one-shot test for {duration_seconds:.2f}s")
     recorder = Recorder(source, logger)
@@ -830,6 +1493,12 @@ def run_once(
         type_delay_ms,
         logger,
         live_type=True,
+        suppress_regex=suppress_regex,
+        suppress_nst=suppress_nst,
+        smart_punctuation=smart_punctuation,
+        symbol_words_to_symbols=symbol_words_to_symbols,
+        direct_streaming=direct_streaming,
+        faster_whisper_model=faster_whisper_model,
     )
     transcriber.start()
     transcriber.enqueue(SegmentJob(index=0, start=0, end=recorder.available(), final=True))
@@ -856,6 +1525,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     model = Path(args.model).expanduser()
     preferred_sources = parse_preferred_sources(args.preferred_sources)
 
+    fw_model = None
+    if HAS_FASTER_WHISPER:
+        try:
+            fw_model = WhisperModel("base.en", device="cpu", compute_type="int8",
+                                  download_root=os.path.expanduser("~/.config/com.pais.handy/models/"))
+            logger.log("faster-whisper model loaded (base.en, CPU, int8)")
+        except Exception as e:
+            logger.log(f"faster-whisper load failed: {e}, falling back to CLI")
+
     try:
         ensure_dependencies(model, whisper_cli)
         source = resolve_audio_source(args.source, preferred_sources, logger)
@@ -868,6 +1546,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 language=args.language,
                 type_delay_ms=args.type_delay_ms,
                 logger=logger,
+                suppress_regex=args.suppress_regex,
+                suppress_nst=args.suppress_nst,
+                smart_punctuation=args.smart_punctuation,
+                symbol_words_to_symbols=args.symbol_words_to_symbols,
+                direct_streaming=args.direct_streaming,
+                faster_whisper_model=fw_model,
             )
 
         instance = SingleInstance(LOCK_FILE)
@@ -881,6 +1565,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             overlap_seconds=args.overlap_seconds,
             type_delay_ms=args.type_delay_ms,
             logger=logger,
+            suppress_regex=args.suppress_regex,
+            suppress_nst=args.suppress_nst,
+            smart_punctuation=args.smart_punctuation,
+            symbol_words_to_symbols=args.symbol_words_to_symbols,
+            direct_streaming=args.direct_streaming,
+            activation_mode=args.activation_mode,
+            indicator=args.indicator,
+            faster_whisper_model=fw_model,
+            postprocess_enabled=args.postprocess,
+            postprocess_mode=args.postprocess_mode,
+            postprocess_trigger=args.postprocess_trigger,
         )
         signal.signal(signal.SIGINT, daemon.stop)
         signal.signal(signal.SIGTERM, daemon.stop)

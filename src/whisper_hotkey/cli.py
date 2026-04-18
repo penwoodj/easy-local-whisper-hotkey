@@ -1,11 +1,27 @@
 import argparse
-import json
+import os
 import sys
 from pathlib import Path
 from typing import Sequence
 
 from . import __version__
 from . import app
+
+
+def load_env_file(file_path: str) -> dict[str, str]:
+    """Load key=value pairs from environment file"""
+    env_vars = {}
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    if '=' in line:
+                        key, value = line.split('=', 1)
+                        env_vars[key.strip()] = value.strip()
+    except FileNotFoundError:
+        pass
+    return env_vars
 
 
 KNOWN_COMMANDS = {
@@ -25,8 +41,8 @@ def add_runtime_options(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--model",
-        default=str(app.DEFAULT_MODEL),
-        help="Path to the ggml model file.",
+        default=os.environ.get("WHISPER_MODEL", str(app.DEFAULT_MODEL)),
+        help="Path to ggml model file.",
     )
     parser.add_argument(
         "--source",
@@ -41,35 +57,70 @@ def add_runtime_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--chunk-seconds",
         type=float,
-        default=1.8,
+        default=float(os.environ.get("WHISPER_CHUNK_SECONDS", "3.5")),
         help="Streaming segment length before transcription.",
     )
     parser.add_argument(
         "--overlap-seconds",
         type=float,
-        default=0.4,
+        default=float(os.environ.get("WHISPER_OVERLAP_SECONDS", "0.8")),
         help="Overlap between adjacent transcription segments.",
     )
     parser.add_argument(
         "--type-delay-ms",
         type=int,
-        default=1,
+        default=int(os.environ.get("WHISPER_TYPE_DELAY_MS", "1")),
         help="Per-character xdotool delay in milliseconds.",
     )
     parser.add_argument(
         "--language",
-        default="en",
+        default=os.environ.get("WHISPER_LANGUAGE", "en"),
         help="Language code passed to whisper-cli.",
+    )
+    parser.add_argument(
+        "--suppress-regex",
+        default="[,.]",
+        help="Regex pattern to suppress specific tokens from whisper output.",
+    )
+    parser.add_argument(
+        "--suppress-nst",
+        action="store_true",
+        default=os.environ.get("WHISPER_SUPPRESS_NST", "true").lower() == "true",
+        help="Suppress non-speech tokens (sound effects, musical notes).",
+    )
+    parser.add_argument(
+        "--smart-punctuation",
+        action="store_true",
+        default=os.environ.get("WHISPER_SMART_PUNCTUATION", "true").lower() == "true",
+        help="Keep punctuation from explicit words (comma, period, etc.) while suppressing natural pauses.",
+    )
+    parser.add_argument(
+        "--symbol-words-to-symbols",
+        action="store_true",
+        default=os.environ.get("WHISPER_SYMBOL_WORDS_TO_SYMBOLS", "false").lower() == "true",
+        help="Convert spoken symbol names to actual symbols (comma → , period → .).",
+    )
+    parser.add_argument(
+        "--direct-streaming",
+        action="store_true",
+        default=os.environ.get("WHISPER_DIRECT_STREAMING", "false").lower() == "true",
+        help="Enable real-time text streaming as you speak.",
+    )
+    parser.add_argument(
+        "--config-env-file",
+        type=str,
+        default=os.environ.get("WHISPER_CONFIG_ENV_FILE", ""),
+        help="Path to environment file to load configuration from.",
     )
     parser.add_argument(
         "--log-file",
         default=str(app.DEFAULT_LOG_FILE),
-        help="Path to the runtime log file.",
+        help="Path to runtime log file.",
     )
 
 
 def forwarded_runtime_args(namespace: argparse.Namespace) -> list[str]:
-    return [
+    args = [
         "--whisper-cli",
         namespace.whisper_cli,
         "--model",
@@ -89,6 +140,17 @@ def forwarded_runtime_args(namespace: argparse.Namespace) -> list[str]:
         "--log-file",
         namespace.log_file,
     ]
+    if namespace.suppress_regex:
+        args.extend(["--suppress-regex", namespace.suppress_regex])
+    if namespace.suppress_nst:
+        args.append("--suppress-nst")
+    if namespace.smart_punctuation:
+        args.append("--smart-punctuation")
+    if namespace.symbol_words_to_symbols:
+        args.append("--symbol-words-to-symbols")
+    if namespace.direct_streaming:
+        args.append("--direct-streaming")
+    return args
 
 
 def runtime_snapshot(namespace: argparse.Namespace) -> dict[str, object]:
@@ -103,6 +165,11 @@ def runtime_snapshot(namespace: argparse.Namespace) -> dict[str, object]:
             "overlap_seconds": namespace.overlap_seconds,
             "type_delay_ms": namespace.type_delay_ms,
             "language": namespace.language,
+            "suppress_regex": namespace.suppress_regex,
+            "suppress_nst": namespace.suppress_nst,
+            "smart_punctuation": namespace.smart_punctuation,
+            "symbol_words_to_symbols": namespace.symbol_words_to_symbols,
+            "direct_streaming": namespace.direct_streaming,
             "log_file": namespace.log_file,
             "version": __version__,
         }
@@ -130,6 +197,13 @@ def print_human_snapshot(snapshot: dict[str, object]) -> None:
     if snapshot.get("resolved_source_error"):
         print(f"Resolved source error: {snapshot['resolved_source_error']}")
     print(f"Default desktop source: {snapshot['default_source'] or '<unknown>'}")
+    print(f"Chunk seconds: {snapshot.get('chunk_seconds', 'N/A')}")
+    print(f"Overlap seconds: {snapshot.get('overlap_seconds', 'N/A')}")
+    print(f"Suppress regex: {snapshot.get('suppress_regex', 'N/A')}")
+    print(f"Suppress non-speech tokens: {snapshot.get('suppress_nst', 'N/A')}")
+    print(f"Smart punctuation: {snapshot.get('smart_punctuation', 'N/A')}")
+    print(f"Symbol words to symbols: {snapshot.get('symbol_words_to_symbols', 'N/A')}")
+    print(f"Direct streaming: {snapshot.get('direct_streaming', 'N/A')}")
     print("Commands:")
     print(f"  parec: {commands['parec']}")
     print(f"  pactl: {commands['pactl']}")
@@ -193,10 +267,22 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--version",
         action="store_true",
-        help="Print the package version and exit.",
+        help="Print package version and exit.",
     )
 
     subparsers = parser.add_subparsers(dest="command")
+
+    # Load environment file if specified
+    args_before = sys.argv[1:]
+    config_env_file = None
+    for i, arg in enumerate(args_before):
+        if arg.startswith("--config-env-file="):
+            config_env_file = arg.split("=", 1)[1] if "=" in arg else args_before[i+1]
+            break
+    if config_env_file:
+        env_vars = load_env_file(config_env_file)
+        for key, value in env_vars.items():
+            os.environ[key] = value
 
     run_parser = subparsers.add_parser("run", help="Run the long-lived Ctrl+Space daemon.")
     add_runtime_options(run_parser)
