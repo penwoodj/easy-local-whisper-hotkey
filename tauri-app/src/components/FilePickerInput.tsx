@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { open } from '@tauri-apps/plugin-dialog';
+import { homeDir } from '@tauri-apps/api/path';
 import { Input } from './ui/input';
 import { cn } from '@/lib/utils';
 
@@ -11,13 +12,11 @@ interface FilePickerInputProps {
 }
 
 export function FilePickerInput({ value, onChange, placeholder, label }: FilePickerInputProps) {
-  const [displayValue, setDisplayValue] = useState(() => {
-    const homeDir = process.env.HOME || '';
-    if (homeDir && value.startsWith(homeDir)) {
-      return '~' + value.slice(homeDir.length);
-    }
-    return value;
-  });
+  const [displayValue, setDisplayValue] = useState<string>(value);
+
+  useEffect(() => {
+    setDisplayValue(value);
+  }, [value]);
 
   const handleBrowse = async () => {
     try {
@@ -27,13 +26,12 @@ export function FilePickerInput({ value, onChange, placeholder, label }: FilePic
       });
       if (selected && typeof selected === 'string') {
         onChange(selected);
-        setDisplayValue(() => {
-          const homeDir = process.env.HOME || '';
-          if (homeDir && selected.startsWith(homeDir)) {
-            return '~' + selected.slice(homeDir.length);
-          }
-          return selected;
-        });
+        const home = await homeDir();
+        if (home && selected.startsWith(home)) {
+          setDisplayValue('~' + selected.slice(home.length));
+        } else {
+          setDisplayValue(selected);
+        }
       }
     } catch (err) {
       console.error('Failed to open file picker:', err);
@@ -44,12 +42,12 @@ export function FilePickerInput({ value, onChange, placeholder, label }: FilePic
     <div className="flex gap-1">
       <Input
         value={displayValue}
-        onChange={(e) => {
+        onChange={async (e) => {
           const newValue = e.target.value;
           setDisplayValue(newValue);
           if (newValue.startsWith('~/')) {
-            const homeDir = process.env.HOME || '';
-            onChange(homeDir + newValue.slice(1));
+            const home = await homeDir();
+            onChange(home + newValue.slice(1));
           } else {
             onChange(newValue);
           }
