@@ -116,7 +116,7 @@ function App() {
 
                 <div className="flex items-center justify-center gap-2">
                   <span
-                    className={\`text-2xl \${isRecording ? 'animate-pulse' : ''}\`}
+                    className={`text-2xl ${isRecording ? 'animate-pulse' : ''}`}
                     role="img"
                     aria-label="Recording indicator"
                   >

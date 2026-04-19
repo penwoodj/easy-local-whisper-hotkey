@@ -13,6 +13,14 @@ export type PostProcessingTrigger = 'always' | 'manual' | 'auto-long' | 'preview
 
 export type VoiceActivationMode = 'hold' | 'toggle';
 
+export interface FilterRule {
+  id: string;
+  name: string;
+  pattern: string;
+  enabled: boolean;
+  is_builtin: boolean;
+}
+
 export interface WhisperConfig {
   whisper_cli: string;
   model: string;
