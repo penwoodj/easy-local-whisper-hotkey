@@ -70,3 +70,48 @@ body {
   margin: 0;
   overflow: hidden;
 }
+
+/* Thin custom scrollbar */
+.scroll-container {
+  padding-right: 12px;
+  scrollbar-width: thin;
+  scrollbar-color: hsl(250 20% 20%) transparent;
+}
+
+.scroll-container::-webkit-scrollbar {
+  width: 4px;
+}
+
+.scroll-container::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.scroll-container::-webkit-scrollbar-thumb {
+  background: hsl(250 20% 20%);
+  border-radius: 2px;
+}
+
+/* Better button interactions */
+button, [role="button"] {
+  transition: all 150ms ease-in-out;
+}
+
+button:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+/* Focus rings */
+:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px hsl(var(--primary) / 0.3);
+}
+
+/* Tab content fade-in */
+.tab-content {
+  animation: fadeIn 150ms ease-in-out;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
