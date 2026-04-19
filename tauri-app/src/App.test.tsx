@@ -39,6 +39,8 @@ const defaultMockReturn = {
   refreshStatus: vi.fn(),
   startDaemon: vi.fn(),
   stopDaemon: vi.fn(),
+  volumeLevel: 0,
+  isRecording: false,
 };
 
 describe('App', () => {
@@ -68,7 +70,7 @@ describe('App', () => {
     expect(screen.getByText('🎙️ Status')).toBeInTheDocument();
     expect(screen.getByText('⚡ Modes')).toBeInTheDocument();
     expect(screen.getByText('⚙️ Config')).toBeInTheDocument();
-    expect(screen.getByText('Idle')).toBeInTheDocument();
+    expect(screen.getByText('Stopped')).toBeInTheDocument();
     expect(screen.getByText('Some transcribed text')).toBeInTheDocument();
   });
 
@@ -86,36 +88,38 @@ describe('App', () => {
     expect(streamingText).toBeInTheDocument();
   });
 
-  it('applies breathing animation class based on daemon status', () => {
+  it('shows recording indicator when not recording', () => {
     vi.mocked(useWhisperState).mockReturnValue({
       ...defaultMockReturn,
       status: {
         is_running: false,
         stream_text: 'Some text',
       },
+      isRecording: false,
     });
 
     render(<App />);
-    const statusEmoji = screen.getByRole('img', { name: 'Status indicator' });
+    const recordingIndicator = screen.getByRole('img', { name: 'Recording indicator' });
 
-    expect(statusEmoji).toHaveClass('animate-breathe-slow');
-    expect(statusEmoji).not.toHaveClass('animate-breathe-fast');
+    expect(recordingIndicator).toHaveTextContent('🔴');
+    expect(recordingIndicator).not.toHaveClass('animate-pulse');
   });
 
-  it('applies breathing animation class when daemon is running', () => {
+  it('shows recording indicator with pulse animation when recording', () => {
     vi.mocked(useWhisperState).mockReturnValue({
       ...defaultMockReturn,
       status: {
         is_running: true,
         stream_text: 'Streaming text',
       },
+      isRecording: true,
     });
 
     render(<App />);
-    const statusEmoji = screen.getByRole('img', { name: 'Status indicator' });
+    const recordingIndicator = screen.getByRole('img', { name: 'Recording indicator' });
 
-    expect(statusEmoji).toHaveClass('animate-breathe-fast');
-    expect(statusEmoji).not.toHaveClass('animate-breathe-slow');
+    expect(recordingIndicator).toHaveTextContent('🎙️');
+    expect(recordingIndicator).toHaveClass('animate-pulse');
   });
 
   it('navigates between tabs', async () => {
@@ -209,7 +213,7 @@ describe('App', () => {
     const footerHold = screen.getByText('Hold');
     expect(footerHold).toBeInTheDocument();
     expect(screen.getByText('Ctrl+Space', { selector: 'kbd' })).toBeInTheDocument();
-    expect(screen.getByText('Ctrl+Shift+S', { selector: 'kbd' })).toBeInTheDocument();
+    expect(screen.getByText('Ctrl+Shift+Alt+Space', { selector: 'kbd' })).toBeInTheDocument();
     expect(screen.getByText('Modes')).toBeInTheDocument();
   });
 });
