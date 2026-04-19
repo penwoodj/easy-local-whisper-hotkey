@@ -21,7 +21,7 @@ export function AudioSourceSelect({ value, onChange, disabled = false }: AudioSo
     const loadSources = async () => {
       try {
         const result = await invoke<string[]>('list_sources');
-        const audioSources: AudioSource[] = result.map((name, index) => ({
+        const audioSources: AudioSource[] = result.map((name) => ({
           id: name,
           name: name,
         }));
