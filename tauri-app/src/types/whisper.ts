@@ -101,4 +101,6 @@ export type TauriEvent =
   | 'streaming-text'
   | 'daemon-started'
   | 'daemon-stopped'
+  | 'volume-level'
+  | 'recording-state'
   | 'error';

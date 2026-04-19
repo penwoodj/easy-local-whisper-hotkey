@@ -32,6 +32,8 @@ export function useWhisperState() {
   const [status, setStatus] = useState<WhisperStatus>({ is_running: false, stream_text: '' });
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [volumeLevel, setVolumeLevel] = useState<number>(0);
+  const [isRecording, setIsRecording] = useState<boolean>(false);
 
   const loadConfig = useCallback(async () => {
     if (!isTauri()) {
@@ -139,10 +141,20 @@ export function useWhisperState() {
       }));
     });
 
+    const unlistenVolumeLevel = listen<number>('volume-level', (event) => {
+      setVolumeLevel(event.payload);
+    });
+
+    const unlistenRecordingState = listen<boolean>('recording-state', (event) => {
+      setIsRecording(event.payload);
+    });
+
     return () => {
       unlisten.then((fn) => fn());
       unlistenStarted.then((fn) => fn());
       unlistenStopped.then((fn) => fn());
+      unlistenVolumeLevel.then((fn) => fn());
+      unlistenRecordingState.then((fn) => fn());
     };
   }, [loadConfig, refreshStatus]);
 
@@ -155,5 +167,7 @@ export function useWhisperState() {
     refreshStatus,
     startDaemon,
     stopDaemon,
+    volumeLevel,
+    isRecording,
   };
 }
