@@ -1,18 +1,7 @@
 import ctypes
 import math
-import os
-import struct
-import time
-from pathlib import Path
 
-try:
-    from PIL import Image
-    HAS_PIL = True
-except ImportError:
-    HAS_PIL = False
-    Image = None
-
-INDICATOR_SIZE = 64
+INDICATOR_SIZE = 20
 INDICATOR_OFFSET_Y = 24
 
 STATE_IDLE = "idle"
@@ -93,16 +82,9 @@ class CursorIndicator:
         self._argb_visual = None
         self._shape_pixmap = 0
         self._shape_gc = None
-        self._gradient_frames_path = None
-        self._gradient_frames = []
-        self._frame_count = 0
-        self._current_frame_index = 0
-        self._state = STATE_IDLE
-        self._state_frames = {}
         self._setup_libs()
         self._setup_x11_signatures()
         self._create_window()
-        self._load_all_frames()
 
     def _setup_libs(self):
         try:
@@ -379,100 +361,44 @@ class CursorIndicator:
         )
         self.logger.log(f"CursorIndicator: XRender picture created id={self._picture:#x}")
 
-    def _load_all_frames(self):
-        frames_dir = Path(__file__).parent / "indicator_frames"
-        if not frames_dir.exists():
-            self.logger.log("CursorIndicator: indicator_frames directory not found, using solid fallback")
+    def _draw_static_indicator(self):
+        if not self._picture or not self._ext_render or not self._libxrender:
             return
 
-        for state_name in [STATE_IDLE, STATE_RECORDING, STATE_PROCESSING]:
-            state_dir = frames_dir / state_name
-            if state_dir.exists():
-                png_files = sorted(state_dir.glob("frame_*.png"))
-                if png_files:
-                    self._state_frames[state_name] = png_files
-                    self.logger.log(f"CursorIndicator: loaded {len(png_files)} frames for {state_name} state")
-                else:
-                    self.logger.log(f"CursorIndicator: no frames found for {state_name} state")
-            else:
-                self.logger.log(f"CursorIndicator: state directory not found: {state_dir}")
+        size = INDICATOR_SIZE
+        center = size // 2
+        max_r = size // 2 - 1
+        base_r, base_g, base_b = 14, 165, 233
+        bright_r, bright_g, bright_b = 125, 211, 252
 
-        if not self._state_frames:
-            self.logger.log("CursorIndicator: no state frames found, using backward-compatible gradient frames")
-            png_files = sorted(frames_dir.glob("gradient_frame_*.png"))
-            if png_files:
-                self._state_frames[STATE_RECORDING] = png_files
-                self.logger.log(f"CursorIndicator: loaded {len(png_files)} backward-compatible gradient frames")
+        for y in range(size):
+            for x in range(size):
+                dx = x - center + 0.5
+                dy = y - center + 0.5
+                dist = math.sqrt(dx * dx + dy * dy)
+                if dist > max_r:
+                    continue
 
-        self._update_active_frames()
+                t = dist / max_r
+                falloff = max(0.0, 1.0 - t ** 1.5) * 0.9
 
-    def _update_active_frames(self):
-        state_frames = self._state_frames.get(self._state)
-        if state_frames:
-            self._gradient_frames = state_frames
-            self._frame_count = len(state_frames)
-            self.logger.log(f"CursorIndicator: active state={self._state}, frames={self._frame_count}")
-        else:
-            self._gradient_frames = []
-            self._frame_count = 0
-            self.logger.log(f"CursorIndicator: no frames for state={self._state}, falling back to solid")
+                r = int(bright_r + (base_r - bright_r) * t)
+                g = int(bright_g + (base_g - bright_g) * t)
+                b = int(bright_b + (base_b - bright_b) * t)
 
-    def set_state(self, state: str):
-        if state not in [STATE_IDLE, STATE_RECORDING, STATE_PROCESSING]:
-            self.logger.log(f"CursorIndicator: invalid state={state}, ignoring")
-            return
-
-        if self._state != state:
-            self._state = state
-            self._update_active_frames()
-
-    def _draw_gradient_frame(self, frame_index):
-        if not self._picture or not self._ext_render or not self._gradient_frames or not HAS_PIL:
-            return
-
-        frame_path = self._gradient_frames[frame_index]
-
-        try:
-            img = Image.open(frame_path)
-            if img.size != (INDICATOR_SIZE, INDICATOR_SIZE):
-                img = img.resize((INDICATOR_SIZE, INDICATOR_SIZE), Image.Resampling.LANCZOS)
-
-            if img.mode != "RGBA":
-                img = img.convert("RGBA")
-
-            for y in range(INDICATOR_SIZE):
-                for x in range(INDICATOR_SIZE):
-                    r, g, b, a = img.getpixel((x, y))
-                    if a == 0:
-                        continue
-
-                    color = _XRenderColor(
-                        red=int(r / 255 * 65535),
-                        green=int(g / 255 * 65535),
-                        blue=int(b / 255 * 65535),
-                        alpha=int(a / 255 * 65535),
-                    )
-                    self._libxrender.XRenderFillRectangle(
-                        self.display, PICT_OP_SRC, self._picture,
-                        ctypes.byref(color), x, y, 1, 1,
-                    )
-        except Exception as e:
-            self.logger.log(f"CursorIndicator: failed to draw frame {frame_index}: {e}")
+                color = _XRenderColor(
+                    red=int(r / 255 * 65535),
+                    green=int(g / 255 * 65535),
+                    blue=int(b / 255 * 65535),
+                    alpha=int(falloff * 65535),
+                )
+                self._libxrender.XRenderFillRectangle(
+                    self.display, PICT_OP_SRC, self._picture,
+                    ctypes.byref(color), x, y, 1, 1,
+                )
 
     def tick(self):
-        if not self._visible or not self._window:
-            return
-
-        if self._gradient_frames:
-            phase = time.time() * 1.5
-            pulse = math.sin(phase)
-            frame_offset = int((pulse + 1) / 2 * self._frame_count) % self._frame_count
-            self._current_frame_index = frame_offset
-            self._draw_gradient_frame(frame_offset)
-        else:
-            phase = time.time() * 1.5
-            pulse = math.sin(phase)
-            self._draw(0.55 + 0.08 * pulse, 0.25 + 0.05 * pulse)
+        pass
 
     def show(self):
         if not self._window:
@@ -495,6 +421,7 @@ class CursorIndicator:
             self._pos_x = root_x.value - INDICATOR_SIZE // 2
             self._pos_y = root_y.value - INDICATOR_OFFSET_Y
         self.libx11.XMoveWindow(self.display, self._window, self._pos_x, self._pos_y)
+        self._draw_static_indicator()
         self._visible = True
         self.libx11.XMapWindow(self.display, self._window)
         self.logger.log("CursorIndicator: shown")

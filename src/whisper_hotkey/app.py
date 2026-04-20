@@ -1,5 +1,6 @@
 import argparse
 import ctypes
+import difflib
 import fcntl
 import os
 import queue
@@ -425,8 +426,50 @@ def compute_append_text(history_words, new_text: str) -> str:
             best_overlap = overlap
             break
 
+    if best_overlap == 0 and max_overlap >= 2:
+        for overlap in range(max_overlap, 1, -1):
+            tail = normalized_history[-overlap:]
+            head = normalized_new[:overlap]
+            sim = difflib.SequenceMatcher(None, tail, head).ratio()
+            if sim >= 0.8:
+                best_overlap = overlap
+                break
+
     append_words = new_words[best_overlap:]
     return " ".join(append_words).strip()
+
+
+def _deduplicate_flush_text(text: str) -> str:
+    words = text.split()
+    if len(words) < 4:
+        return text
+
+    changed = True
+    while changed:
+        changed = False
+        i = 0
+        while i < len(words) - 2:
+            removed = False
+            for plen in range(min(8, len(words) - i), 2, -1):
+                phrase = words[i:i + plen]
+                for j in range(i + plen, min(i + plen + 12, len(words) - plen + 1)):
+                    candidate = words[j:j + plen]
+                    if phrase == candidate:
+                        del words[j:j + plen]
+                        changed = True
+                        removed = True
+                        break
+                    if plen >= 3 and difflib.SequenceMatcher(None, phrase, candidate).ratio() >= 0.85:
+                        del words[j:j + plen]
+                        changed = True
+                        removed = True
+                        break
+                if removed:
+                    break
+            if not removed:
+                i += 1
+
+    return " ".join(words)
 
 
 class Recorder:
@@ -573,7 +616,9 @@ class Transcriber(threading.Thread):
             payload = " ".join(self.pending_fragments).strip()
             self.pending_fragments.clear()
         if payload:
-            self._type_text(payload)
+            payload = _deduplicate_flush_text(payload)
+            if payload:
+                self._type_text(payload)
 
     def run(self) -> None:
         while True:
