@@ -41,7 +41,15 @@ function parseRules(jsonString: string): FilterRule[] {
   try {
     const parsed = JSON.parse(jsonString);
     if (Array.isArray(parsed)) {
-      return parsed;
+      return parsed.filter(
+        (item): item is FilterRule =>
+          item != null &&
+          typeof item === 'object' &&
+          typeof item.id === 'string' &&
+          typeof item.name === 'string' &&
+          typeof item.pattern === 'string' &&
+          typeof item.enabled === 'boolean'
+      );
     }
 
     if (typeof parsed === 'string') {

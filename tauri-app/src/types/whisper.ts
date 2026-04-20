@@ -9,7 +9,7 @@ export type PostProcessingMode =
   | 'persona'
   | 'clarity';
 
-export type PostProcessingTrigger = 'always' | 'manual' | 'auto-long' | 'preview';
+export type PostProcessingTrigger = 'always' | 'manual' | 'auto_long' | 'preview';
 
 export type VoiceActivationMode = 'hold' | 'toggle';
 
@@ -20,6 +20,8 @@ export interface FilterRule {
   enabled: boolean;
   is_builtin: boolean;
 }
+
+export type LogLevel = 'info' | 'debug';
 
 export interface WhisperConfig {
   whisper_cli: string;
@@ -36,6 +38,7 @@ export interface WhisperConfig {
   symbol_words_to_symbols: boolean;
   direct_streaming: boolean;
   log_file: string;
+  log_level: LogLevel;
   post_processing_enabled: boolean;
   post_processing_mode: PostProcessingMode;
   post_processing_trigger: PostProcessingTrigger;

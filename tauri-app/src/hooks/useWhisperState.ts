@@ -20,6 +20,7 @@ const demoConfig: WhisperConfig = {
   suppress_nst: true,
   suppress_regex: '',
   log_file: '/tmp/whisper_hotkey.log',
+  log_level: 'info',
   voice_activation_mode: 'toggle',
   indicator_enabled: true,
   post_processing_enabled: false,
@@ -46,18 +47,27 @@ export function useWhisperState() {
       setConfig(loadedConfig);
     } catch (err) {
       setError(`Failed to load config: ${err}`);
+      setConfig(null);
     }
   }, []);
 
   const saveConfig = useCallback(async (newConfig: WhisperConfig) => {
+    setConfig((prev) => {
+      if (prev) {
+        const keys = Object.keys(newConfig) as (keyof WhisperConfig)[];
+        if (keys.every((k) => prev[k] === newConfig[k])) {
+          return prev;
+        }
+      }
+      return newConfig;
+    });
+
     if (!isTauri()) {
-      setConfig(newConfig);
       return;
     }
     try {
       setError(null);
       await invoke('set_config', { config: newConfig });
-      setConfig(newConfig);
     } catch (err) {
       setError(`Failed to save config: ${err}`);
     }

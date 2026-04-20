@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { ConfigurationPanel } from './components/ConfigurationPanel';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { StreamingTextDisplay } from './components/StreamingTextDisplay';
 import { ModeQuickSelect } from './components/ModeQuickSelect';
 import { VolumeWaveform } from './components/VolumeWaveform';
@@ -32,7 +33,7 @@ function App() {
 
   if (isLoading) {
     return (
-      <div className="flex h-screen w-screen items-center justify-center bg-background">
+      <div className="flex items-center justify-center bg-background" style={{ height: '100%', width: '100%' }}>
         <div className="text-center">
           <div className="mb-4 h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
           <p className="text-sm text-muted-foreground">
@@ -55,35 +56,35 @@ function App() {
   };
 
   return (
-    <div className="flex h-screen w-screen flex-col bg-background">
+    <div className="flex flex-col bg-background" style={{ height: '100%', width: '100%' }}>
       <div className="flex shrink-0 gap-0 border-b border-border">
         <button
           type="button"
           onClick={() => setActiveTab('status')}
-          className={\`flex-1 px-2 py-3 text-xs font-medium transition-colors \${activeTab === 'status'
+          className={`flex-1 px-2 py-3 text-xs font-medium transition-colors ${activeTab === 'status'
               ? 'bg-primary text-primary-foreground'
               : 'bg-background text-muted-foreground hover:text-foreground'
-          }\`}
+          }`}
         >
           🎙️ Status
         </button>
         <button
           type="button"
           onClick={() => setActiveTab('modes')}
-          className={\`flex-1 px-2 py-3 text-xs font-medium transition-colors \${activeTab === 'modes'
+          className={`flex-1 px-2 py-3 text-xs font-medium transition-colors ${activeTab === 'modes'
               ? 'bg-primary text-primary-foreground'
               : 'bg-background text-muted-foreground hover:text-foreground'
-          }\`}
+          }`}
         >
           ⚡ Modes
         </button>
         <button
           type="button"
           onClick={() => setActiveTab('config')}
-          className={\`flex-1 px-2 py-3 text-xs font-medium transition-colors \${activeTab === 'config'
+          className={`flex-1 px-2 py-3 text-xs font-medium transition-colors ${activeTab === 'config'
               ? 'bg-primary text-primary-foreground'
               : 'bg-background text-muted-foreground hover:text-foreground'
-          }\`}
+          }`}
         >
           ⚙️ Config
         </button>
@@ -91,7 +92,7 @@ function App() {
 
       <div className="flex-1 overflow-y-auto">
         {activeTab === 'status' && (
-          <div className="scroll-container tab-content flex flex-col p-4 space-y-4">
+          <div className="scroll-container  flex flex-col p-4 space-y-4">
             {error && (
               <Card className="border-destructive bg-destructive/10">
                 <CardContent className="p-3">
@@ -175,7 +176,7 @@ function App() {
         )}
 
         {activeTab === 'modes' && config && (
-          <div className="scroll-container tab-content flex flex-col p-4 space-y-4">
+          <div className="scroll-container  flex flex-col p-4 space-y-4">
             <ModeQuickSelect
               currentMode={config.post_processing_mode}
               onModeChange={(mode) =>
@@ -205,18 +206,26 @@ function App() {
         )}
 
         {activeTab === 'config' && config && (
-          <div className="scroll-container tab-content flex flex-col p-4">
-            <ConfigurationPanel
-              config={config}
-              onConfigChange={saveConfig}
-              disabled={status.is_running}
-            />
+          <div className="scroll-container flex flex-col p-4 overflow-y-auto" style={{ flex: 1 }}>
+            <ErrorBoundary>
+              <ConfigurationPanel
+                config={config}
+                onConfigChange={saveConfig}
+                disabled={status.is_running}
+              />
+            </ErrorBoundary>
             {status.is_running && (
               <div className="mt-4 flex items-center gap-2 text-xs text-amber-400">
                 <span>⚠️</span>
                 <span>Stop daemon to apply changes</span>
               </div>
             )}
+          </div>
+        )}
+
+        {activeTab === 'config' && !config && (
+          <div className="flex items-center justify-center p-8">
+            <p className="text-sm text-destructive">Failed to load configuration.</p>
           </div>
         )}
       </div>

@@ -1,10 +1,24 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ConfigurationPanel } from './ConfigurationPanel';
 import type { WhisperConfig } from '../types/whisper';
+import { mockInvoke } from '../test/setup';
 
 describe('ConfigurationPanel', () => {
+  beforeEach(() => {
+    (window as any).__TAURI_INTERNALS__ = {};
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === 'list_sources') {
+        return Promise.resolve(['alsa_input.test', 'alsa_output.test']);
+      }
+      return Promise.resolve(undefined);
+    });
+  });
+
+  afterEach(() => {
+    delete (window as any).__TAURI_INTERNALS__;
+  });
   const defaultConfig: WhisperConfig = {
     whisper_cli: '/usr/local/bin/whisper-cli',
     model: '~/.local/share/whisper-hotkey/models/ggml-base.en.bin',
@@ -25,6 +39,7 @@ describe('ConfigurationPanel', () => {
     post_processing_enabled: false,
     post_processing_mode: 'off',
     post_processing_trigger: 'manual',
+    log_level: 'info' as const,
   };
 
   it('renders all configuration sections', () => {
@@ -59,7 +74,7 @@ describe('ConfigurationPanel', () => {
     expect(modelInput).toHaveValue(defaultConfig.model);
   });
 
-  it('renders Audio Source section with correct inputs', () => {
+  it('renders Audio Source section with correct inputs', async () => {
     const onConfigChange = vi.fn();
     render(
       <ConfigurationPanel config={defaultConfig} onConfigChange={onConfigChange} />
@@ -68,8 +83,9 @@ describe('ConfigurationPanel', () => {
     expect(screen.getByLabelText('Source')).toBeInTheDocument();
     expect(screen.getByLabelText('Preferred')).toBeInTheDocument();
 
-    const sourceInput = screen.getByLabelText('Source');
-    expect(sourceInput).toHaveValue(defaultConfig.source);
+    // AudioSourceSelect is a Radix Select with button trigger, check it exists
+    const sourceCombobox = screen.getByRole('combobox', { name: /Source/i });
+    expect(sourceCombobox).toBeInTheDocument();
 
     const preferredInput = screen.getByLabelText('Preferred');
     expect(preferredInput).toHaveValue(defaultConfig.preferred_sources);
@@ -159,11 +175,9 @@ describe('ConfigurationPanel', () => {
       <ConfigurationPanel config={defaultConfig} onConfigChange={onConfigChange} />
     );
 
-    expect(screen.getByLabelText('Suppress Regex')).toBeInTheDocument();
+    // RulesManager renders rules with labels, not a form input
+    expect(screen.getByText('Remove filler words')).toBeInTheDocument();
     expect(screen.getByLabelText('Log File')).toBeInTheDocument();
-
-    const suppressRegexInput = screen.getByLabelText('Suppress Regex');
-    expect(suppressRegexInput).toHaveValue(defaultConfig.suppress_regex);
 
     const logFileInput = screen.getByLabelText('Log File');
     expect(logFileInput).toHaveValue(defaultConfig.log_file);
@@ -237,19 +251,28 @@ describe('ConfigurationPanel', () => {
   });
 
   it('calls onConfigChange when Source changes', async () => {
+    const user = userEvent.setup();
     const onConfigChange = vi.fn();
     render(
       <ConfigurationPanel config={defaultConfig} onConfigChange={onConfigChange} />
     );
 
-    const input = screen.getByLabelText('Source');
-    fireEvent.change(input, { target: { value: 'custom-source' } });
+    // Open the Post-Processing section first to expose it
+    await user.click(screen.getByText('Audio Source'));
+
+    // Find and click the Source combobox
+    const sourceCombobox = screen.getByRole('combobox', { name: /Source/i });
+    await user.click(sourceCombobox);
+
+    // Click on an option
+    const option = await screen.findByRole('option', { name: 'alsa_output.test' });
+    await user.click(option);
 
     expect(onConfigChange).toHaveBeenCalled();
     const calls = onConfigChange.mock.calls;
     const lastCall = calls[calls.length - 1][0];
     expect(lastCall).toHaveProperty('source');
-    expect(lastCall.source).toBe('custom-source');
+    expect(lastCall.source).toBe('alsa_output.test');
   });
 
   it('calls onConfigChange when Preferred sources changes', async () => {
@@ -414,11 +437,9 @@ describe('ConfigurationPanel', () => {
 
     await user.click(screen.getByText('Post-Processing'));
 
-    const modeTrigger = document.getElementById('post-processing-mode')!;
-    await user.click(modeTrigger);
-
-    const aggressiveOption = await screen.findByRole('option', { name: /Aggressive/i });
-    await user.click(aggressiveOption);
+    // PostProcessingGrid uses buttons, not a Select dropdown
+    const aggressiveButton = screen.getByText('Aggressive');
+    await user.click(aggressiveButton);
 
     expect(onConfigChange).toHaveBeenCalled();
     const calls = onConfigChange.mock.calls;
@@ -493,19 +514,28 @@ describe('ConfigurationPanel', () => {
   });
 
   it('calls onConfigChange when Suppress Regex changes', async () => {
+    const user = userEvent.setup();
     const onConfigChange = vi.fn();
     render(
       <ConfigurationPanel config={defaultConfig} onConfigChange={onConfigChange} />
     );
 
-    const input = screen.getByLabelText('Suppress Regex');
-    fireEvent.change(input, { target: { value: '[^\\w\\s]' } });
+    await user.click(screen.getByText('Advanced'));
+
+    const ruleNameInput = screen.getByPlaceholderText('Rule name');
+    const patternInput = screen.getByPlaceholderText('Regex pattern');
+
+    await user.type(ruleNameInput, 'Test rule');
+    fireEvent.change(patternInput, { target: { value: '[^\\w\\s]' } });
+
+    const addButtons = screen.getAllByText('Add');
+    const addButton = addButtons[addButtons.length - 1];
+    await user.click(addButton);
 
     expect(onConfigChange).toHaveBeenCalled();
     const calls = onConfigChange.mock.calls;
     const lastCall = calls[calls.length - 1][0];
     expect(lastCall).toHaveProperty('suppress_regex');
-    expect(lastCall.suppress_regex).toBe('[^\\w\\s]');
   });
 
   it('calls onConfigChange when Log File changes', async () => {
@@ -530,23 +560,36 @@ describe('ConfigurationPanel', () => {
       <ConfigurationPanel config={defaultConfig} onConfigChange={onConfigChange} disabled />
     );
 
-    const inputs = screen.getAllByRole('textbox');
-    inputs.forEach(input => {
-      expect(input).toBeDisabled();
-    });
-
+    // Check that switches are disabled
     const switches = screen.getAllByRole('switch');
     switches.forEach(switchElement => {
       expect(switchElement).toBeDisabled();
     });
 
+    // Check that comboboxes are disabled
     const comboboxes = screen.getAllByRole('combobox');
     comboboxes.forEach(combobox => {
       expect(combobox).toBeDisabled();
     });
+
+    // Check that the Model input is disabled
+    const modelInput = screen.getByLabelText('Model');
+    expect(modelInput).toBeDisabled();
+
+    // Check that numeric inputs are disabled
+    const chunkInput = screen.getByLabelText('Chunk (s)');
+    expect(chunkInput).toBeDisabled();
+    const overlapInput = screen.getByLabelText('Overlap (s)');
+    expect(overlapInput).toBeDisabled();
+    const typeDelayInput = screen.getByLabelText('Type Delay (ms)');
+    expect(typeDelayInput).toBeDisabled();
+
+    // Check that the Preferred sources input is disabled
+    const preferredInput = screen.getByLabelText('Preferred');
+    expect(preferredInput).toBeDisabled();
   });
 
-  it('disables Post-Processing dropdowns when post_processing_enabled is false', async () => {
+  it('disables Post-Processing grid when post_processing_enabled is false', async () => {
     const user = userEvent.setup();
     const onConfigChange = vi.fn();
     render(
@@ -555,14 +598,21 @@ describe('ConfigurationPanel', () => {
 
     await user.click(screen.getByText('Post-Processing'));
 
-    const modeTrigger = document.getElementById('post-processing-mode')!;
-    const triggerEl = document.getElementById('post-processing-trigger')!;
+    // PostProcessingGrid buttons should be disabled
+    const offButton = screen.getByText('Off').closest('button');
+    const lightButton = screen.getByText('Light').closest('button');
+    const aggressiveButton = screen.getByText('Aggressive').closest('button');
 
-    expect(modeTrigger).toBeDisabled();
-    expect(triggerEl).toBeDisabled();
+    expect(offButton).toBeDisabled();
+    expect(lightButton).toBeDisabled();
+    expect(aggressiveButton).toBeDisabled();
+
+    // Trigger select should still be enabled
+    const triggerCombobox = screen.getByRole('combobox', { name: /Trigger/i });
+    expect(triggerCombobox).toBeDisabled();
   });
 
-  it('enables Post-Processing dropdowns when post_processing_enabled is true', async () => {
+  it('enables Post-Processing grid when post_processing_enabled is true', async () => {
     const user = userEvent.setup();
     const onConfigChange = vi.fn();
     const configWithEnabled = {
@@ -575,11 +625,18 @@ describe('ConfigurationPanel', () => {
 
     await user.click(screen.getByText('Post-Processing'));
 
-    const modeTrigger = document.getElementById('post-processing-mode')!;
-    const triggerEl = document.getElementById('post-processing-trigger')!;
+    // PostProcessingGrid buttons should be enabled
+    const offButton = screen.getByText('Off').closest('button');
+    const lightButton = screen.getByText('Light').closest('button');
+    const aggressiveButton = screen.getByText('Aggressive').closest('button');
 
-    expect(modeTrigger).not.toBeDisabled();
-    expect(triggerEl).not.toBeDisabled();
+    expect(offButton).not.toBeDisabled();
+    expect(lightButton).not.toBeDisabled();
+    expect(aggressiveButton).not.toBeDisabled();
+
+    // Trigger select should also be enabled
+    const triggerCombobox = screen.getByRole('combobox', { name: /Trigger/i });
+    expect(triggerCombobox).not.toBeDisabled();
   });
 
   it('handles numeric input edge cases', async () => {

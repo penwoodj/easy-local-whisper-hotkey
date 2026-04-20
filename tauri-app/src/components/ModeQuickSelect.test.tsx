@@ -28,10 +28,10 @@ describe('ModeQuickSelect', () => {
     );
 
     const lightButton = screen.getByText('Light').closest('button')!;
-    expect(lightButton).toHaveClass('bg-primary');
+    expect(lightButton).toHaveClass('border-primary');
 
     const offButton = screen.getByText('Off').closest('button')!;
-    expect(offButton).not.toHaveClass('bg-primary');
+    expect(offButton).not.toHaveClass('border-primary');
   });
 
   it('calls onModeChange when mode button is clicked', async () => {

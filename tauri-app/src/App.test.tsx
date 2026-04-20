@@ -28,6 +28,7 @@ const defaultMockReturn = {
     post_processing_enabled: false,
     post_processing_mode: 'off' as PostProcessingMode,
     post_processing_trigger: 'manual' as PostProcessingTrigger,
+    log_level: 'info' as const,
   },
   status: {
     is_running: false,

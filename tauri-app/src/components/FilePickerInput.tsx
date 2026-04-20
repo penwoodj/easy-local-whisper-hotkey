@@ -4,14 +4,29 @@ import { homeDir } from '@tauri-apps/api/path';
 import { Input } from './ui/input';
 import { cn } from '@/lib/utils';
 
+const isTauri = (): boolean => typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+
+async function expandTilde(path: string): Promise<string> {
+  if (!isTauri()) return path;
+  const home = await homeDir();
+  return home ? home + path.slice(1) : path;
+}
+
+async function shortenToTilde(path: string): Promise<string> {
+  if (!isTauri()) return path;
+  const home = await homeDir();
+  return home && path.startsWith(home) ? '~' + path.slice(home.length) : path;
+}
+
 interface FilePickerInputProps {
   value: string;
   onChange: (value: string) => void;
   placeholder?: string;
   label?: string;
+  id?: string;
 }
 
-export function FilePickerInput({ value, onChange, placeholder, label }: FilePickerInputProps) {
+export function FilePickerInput({ value, onChange, placeholder, label, id }: FilePickerInputProps) {
   const [displayValue, setDisplayValue] = useState<string>(value);
 
   useEffect(() => {
@@ -19,6 +34,7 @@ export function FilePickerInput({ value, onChange, placeholder, label }: FilePic
   }, [value]);
 
   const handleBrowse = async () => {
+    if (!isTauri()) return;
     try {
       const selected = await open({
         multiple: false,
@@ -26,12 +42,7 @@ export function FilePickerInput({ value, onChange, placeholder, label }: FilePic
       });
       if (selected && typeof selected === 'string') {
         onChange(selected);
-        const home = await homeDir();
-        if (home && selected.startsWith(home)) {
-          setDisplayValue('~' + selected.slice(home.length));
-        } else {
-          setDisplayValue(selected);
-        }
+        setDisplayValue(await shortenToTilde(selected));
       }
     } catch (err) {
       console.error('Failed to open file picker:', err);
@@ -41,14 +52,18 @@ export function FilePickerInput({ value, onChange, placeholder, label }: FilePic
   return (
     <div className="flex gap-1">
       <Input
+        id={id}
         value={displayValue}
         onChange={async (e) => {
           const newValue = e.target.value;
           setDisplayValue(newValue);
-          if (newValue.startsWith('~/')) {
-            const home = await homeDir();
-            onChange(home + newValue.slice(1));
-          } else {
+          try {
+            if (newValue.startsWith('~/')) {
+              onChange(await expandTilde(newValue));
+            } else {
+              onChange(newValue);
+            }
+          } catch {
             onChange(newValue);
           }
         }}

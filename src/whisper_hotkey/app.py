@@ -18,7 +18,6 @@ from pathlib import Path
 from typing import Sequence
 
 from .postprocessor import PostProcessor, PostProcessMode, PostProcessTrigger
-from .indicator import STATE_IDLE, STATE_RECORDING, STATE_PROCESSING
 
 try:
     import numpy as np
@@ -1342,7 +1341,6 @@ class X11HotkeyDaemon:
             self.recording_active = False
             if self._indicator:
                 self._indicator.hide()
-                self._indicator.set_state(STATE_IDLE)
             if hasattr(self, "_recorder") and self._recorder:
                 time.sleep(0.5)
                 self._recorder.stop()
@@ -1386,7 +1384,6 @@ class X11HotkeyDaemon:
         self._recorder.start()
         self._transcriber.start()
         if self._indicator:
-            self._indicator.set_state(STATE_RECORDING)
             self._indicator.show()
         print("Recording... press Ctrl+Space again to stop.")
 
@@ -1416,7 +1413,6 @@ class X11HotkeyDaemon:
         self.recording_active = False
         if self._indicator:
             self._indicator.hide()
-            self._indicator.set_state(STATE_IDLE)
 
         # Trailing buffer: wait 500ms to capture last words
         time.sleep(0.5)
@@ -1453,7 +1449,6 @@ class X11HotkeyDaemon:
         recorder.start()
         transcriber.start()
         if self._indicator:
-            self._indicator.set_state(STATE_RECORDING)
             self._indicator.show()
         session_start = time.monotonic()
         released_since = None
@@ -1522,7 +1517,6 @@ class X11HotkeyDaemon:
             transcriber.flush_pending_text()
             if self._indicator:
                 self._indicator.hide()
-                self._indicator.set_state(STATE_IDLE)
             session_duration = time.monotonic() - session_start
             self.logger.log(f"Hold session finished after {session_duration:.2f}s")
             self._run_postprocessing()

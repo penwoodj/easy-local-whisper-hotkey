@@ -35,7 +35,7 @@ const LANGUAGE_OPTIONS = [
 const POST_PROCESSING_TRIGGERS: { value: PostProcessingTrigger; label: string }[] = [
   { value: 'always', label: 'Always' },
   { value: 'manual', label: 'Manual' },
-  { value: 'auto-long', label: 'Auto Long' },
+  { value: 'auto_long', label: 'Auto Long' },
   { value: 'preview', label: 'Preview' },
 ];
 
@@ -55,13 +55,13 @@ function CollapsibleSection({ title, defaultOpen, children }: CollapsibleSection
 
   return (
     <details open={isOpen} onToggle={(e) => setIsOpen(e.currentTarget.open)} className="group">
-      <summary className="cursor-pointer list-none select-none text-xs font-semibold text-foreground hover:text-primary">
-        <span className="inline-block transition-transform group-open:rotate-90">
-          {isOpen ? '▶' : '▶'}
+      <summary className="cursor-pointer list-none select-none text-xs font-semibold text-foreground hover:text-primary py-1">
+        <span className={`inline-block transition-transform ${isOpen ? 'rotate-90' : ''}`}>
+          ▶
         </span>
         {' '}{title}
       </summary>
-      <div className={`mt-2 space-y-2 ${isOpen ? 'block' : 'hidden'}`}>
+      <div className="mt-2 space-y-2 pb-2">
         {children}
       </div>
     </details>
@@ -80,6 +80,7 @@ export function ConfigurationPanel({ config, onConfigChange, disabled = false }:
           <div className="space-y-1">
             <label htmlFor="whisper-cli" className="text-xs font-medium leading-none">Whisper CLI</label>
             <FilePickerInput
+              id="whisper-cli"
               value={config.whisper_cli}
               onChange={(value) => updateConfig({ whisper_cli: value })}
               placeholder="Path to whisper-cli executable"
@@ -98,7 +99,7 @@ export function ConfigurationPanel({ config, onConfigChange, disabled = false }:
             <label htmlFor="language" className="text-xs font-medium leading-none">Language</label>
             <Select
               value={config.language}
-              onValueChange={(value) => updateConfig({ language: value as any })}
+              onValueChange={(value) => updateConfig({ language: value })}
               disabled={disabled}
             >
               <SelectTrigger id="language">
@@ -121,6 +122,7 @@ export function ConfigurationPanel({ config, onConfigChange, disabled = false }:
           <div className="space-y-1">
             <label htmlFor="audio-source" className="text-xs font-medium leading-none">Source</label>
             <AudioSourceSelect
+              id="audio-source"
               value={config.source}
               onChange={(value) => updateConfig({ source: value })}
               disabled={disabled}
@@ -309,6 +311,7 @@ export function ConfigurationPanel({ config, onConfigChange, disabled = false }:
           <div className="space-y-1">
             <label htmlFor="log-file" className="text-xs font-medium leading-none">Log File</label>
             <FilePickerInput
+              id="log-file"
               value={config.log_file}
               onChange={(value) => updateConfig({ log_file: value })}
               placeholder="Path to log file"
