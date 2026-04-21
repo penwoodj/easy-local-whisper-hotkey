@@ -1,7 +1,8 @@
 import ctypes
 import math
+import threading
 
-INDICATOR_SIZE = 20
+INDICATOR_SIZE = 14
 INDICATOR_OFFSET_Y = 24
 
 STATE_IDLE = "idle"
@@ -22,6 +23,123 @@ PROP_MODE_REPLACE = 0
 XA_ATOM = 4
 PIXMAP_NONE = 0
 ZPixmap = 2
+
+
+class CaretTracker:
+    """Tracks text caret position via AT-SPI accessibility events."""
+
+    def __init__(self, logger):
+        self.logger = logger
+        self._x = None
+        self._y = None
+        self._lock = threading.Lock()
+        self._thread = None
+        self._running = False
+        self._loop = None
+        self._caret_listener = None
+        self._focus_listener = None
+
+    def start(self):
+        try:
+            import gi
+            gi.require_version('Atspi', '2.0')
+            from gi.repository import Atspi, GLib
+        except (ImportError, ValueError) as exc:
+            self.logger.log(f"CaretTracker: AT-SPI unavailable ({exc}), using mouse fallback")
+            return
+        self._running = True
+        self._thread = threading.Thread(target=self._run_loop, daemon=True)
+        self._thread.start()
+        self.logger.log("CaretTracker: AT-SPI listener started")
+
+    def stop(self):
+        self._running = False
+        if self._loop:
+            try:
+                self._loop.quit()
+            except Exception:
+                pass
+        if self._thread:
+            self._thread.join(timeout=3)
+        self.logger.log("CaretTracker: stopped")
+
+    def get_position(self):
+        """Return cached (x, y) or None if no caret position known."""
+        with self._lock:
+            if self._x is not None and self._y is not None:
+                return (self._x, self._y)
+        return None
+
+    def _on_caret_moved(self, event):
+        try:
+            src = event.source
+            if not src or not src.is_text():
+                return
+            offset = src.get_caret_offset()
+            char_count = src.get_character_count()
+            if offset < 0:
+                return
+            if offset >= char_count:
+                offset = max(0, char_count - 1)
+            rect = src.get_character_extents(offset, 0)
+            x, y, width, height = rect.x, rect.y, rect.width, rect.height
+            if x <= -2147483648 or y <= -2147483648:
+                return
+            with self._lock:
+                self._x = x
+                self._y = y
+            self.logger.log(f"CaretTracker: caret at ({x}, {y})")
+        except Exception as exc:
+            self.logger.log(f"CaretTracker: caret error: {exc}")
+
+    def _on_focus_changed(self, event):
+        if not event.detail1:
+            return
+        try:
+            src = event.source
+            if not src or not src.is_text():
+                return
+            offset = src.get_caret_offset()
+            char_count = src.get_character_count()
+            if offset < 0:
+                return
+            if offset >= char_count:
+                offset = max(0, char_count - 1)
+            rect = src.get_character_extents(offset, 0)
+            x, y, width, height = rect.x, rect.y, rect.width, rect.height
+            if x <= -2147483648 or y <= -2147483648:
+                return
+            with self._lock:
+                self._x = x + width
+                self._y = y
+            self.logger.log(f"CaretTracker: focus at ({x}, {y})")
+        except Exception as exc:
+            self.logger.log(f"CaretTracker: focus error: {exc}")
+
+    def _run_loop(self):
+        try:
+            import gi
+            gi.require_version('Atspi', '2.0')
+            from gi.repository import Atspi, GLib
+
+            self._caret_listener = Atspi.EventListener.new(self._on_caret_moved)
+            self._focus_listener = Atspi.EventListener.new(self._on_focus_changed)
+
+            Atspi.EventListener.register(self._caret_listener, 'object:text-caret-moved')
+            Atspi.EventListener.register(self._focus_listener, 'object:state-changed:focused')
+
+            self._loop = GLib.MainLoop()
+            self._loop.run()
+        except Exception as exc:
+            self.logger.log(f"CaretTracker: event loop failed ({exc})")
+        finally:
+            try:
+                if self._caret_listener:
+                    Atspi.EventListener.deregister(self._caret_listener, 'object:text-caret-moved')
+                if self._focus_listener:
+                    Atspi.EventListener.deregister(self._focus_listener, 'object:state-changed:focused')
+            except Exception:
+                pass
 
 
 class _XImage(ctypes.Structure):
@@ -65,11 +183,12 @@ class _XSetWindowAttributes(ctypes.Structure):
 
 
 class CursorIndicator:
-    def __init__(self, libx11, display, root_window, logger):
+    def __init__(self, libx11, display, root_window, logger, caret_tracker=None):
         self.libx11 = libx11
         self.display = display
         self.root = root_window
         self.logger = logger
+        self._caret_tracker = caret_tracker
         self._window = 0
         self._picture = 0
         self._visible = False
@@ -82,9 +201,12 @@ class CursorIndicator:
         self._argb_visual = None
         self._shape_pixmap = 0
         self._shape_gc = None
+        self._window_gc = None
         self._setup_libs()
         self._setup_x11_signatures()
         self._create_window()
+        self._create_static_bitmap()
+        self._create_static_bitmap()
 
     def _setup_libs(self):
         try:
@@ -149,6 +271,12 @@ class CursorIndicator:
             ctypes.c_int, ctypes.c_int, ctypes.c_uint, ctypes.c_uint,
             ctypes.c_int, ctypes.c_int,
         ]
+        lib.XCopyArea.argtypes = [
+            ctypes.c_void_p, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_void_p,
+            ctypes.c_int, ctypes.c_int, ctypes.c_uint, ctypes.c_uint,
+            ctypes.c_int, ctypes.c_int,
+        ]
+        lib.XCopyArea.restype = ctypes.c_int
         lib.XQueryPointer.argtypes = [
             ctypes.c_void_p, ctypes.c_ulong,
             ctypes.POINTER(ctypes.c_ulong), ctypes.POINTER(ctypes.c_ulong),
@@ -361,15 +489,29 @@ class CursorIndicator:
         )
         self.logger.log(f"CursorIndicator: XRender picture created id={self._picture:#x}")
 
-    def _draw_static_indicator(self):
-        if not self._picture or not self._ext_render or not self._libxrender:
-            return
+    def _create_static_bitmap(self):
+        self._window_gc = self.libx11.XCreateGC(self.display, self._window, 0, None)
+        if self._window_gc:
+            self.logger.log("CursorIndicator: window GC created")
 
+    def _draw_static_indicator(self):
+        if self._picture and self._ext_render and self._libxrender:
+            self._draw_gradient()
+        elif self._window_gc:
+            self._draw_fallback()
+
+    def _draw_gradient(self):
         size = INDICATOR_SIZE
-        center = size // 2
-        max_r = size // 2 - 1
+        center = size / 2
+        max_r = size / 2 - 1
         base_r, base_g, base_b = 14, 165, 233
         bright_r, bright_g, bright_b = 125, 211, 252
+
+        clear = _XRenderColor(red=0, green=0, blue=0, alpha=0)
+        self._libxrender.XRenderFillRectangle(
+            self.display, PICT_OP_SRC, self._picture,
+            ctypes.byref(clear), 0, 0, size, size,
+        )
 
         for y in range(size):
             for x in range(size):
@@ -380,7 +522,7 @@ class CursorIndicator:
                     continue
 
                 t = dist / max_r
-                falloff = max(0.0, 1.0 - t ** 1.5) * 0.9
+                falloff = max(0.0, 1.0 - t ** 1.5) * 0.92
 
                 r = int(bright_r + (base_r - bright_r) * t)
                 g = int(bright_g + (base_g - bright_g) * t)
@@ -397,33 +539,66 @@ class CursorIndicator:
                     ctypes.byref(color), x, y, 1, 1,
                 )
 
+        self.libx11.XSync(self.display, 0)
+
+    def _draw_fallback(self):
+        if not self._window_gc:
+            return
+        self.libx11.XSetForeground(self.display, self._window_gc, 0)
+        self.libx11.XFillRectangle(
+            self.display, self._window, self._window_gc,
+            0, 0, INDICATOR_SIZE, INDICATOR_SIZE,
+        )
+        self.libx11.XSetForeground(self.display, self._window_gc, 65535)
+        self.libx11.XFillArc(
+            self.display, self._window, self._window_gc,
+            1, 1, INDICATOR_SIZE - 2, INDICATOR_SIZE - 2,
+            0, 360 * 64,
+        )
+        self.libx11.XSync(self.display, 0)
+
     def tick(self):
         pass
 
     def show(self):
         if not self._window:
             return
-        root_ret = ctypes.c_ulong()
-        child_ret = ctypes.c_ulong()
-        root_x = ctypes.c_int()
-        root_y = ctypes.c_int()
-        win_x = ctypes.c_int()
-        win_y = ctypes.c_int()
-        mask_ret = ctypes.c_uint()
-        ok = self.libx11.XQueryPointer(
-            self.display, self.root,
-            ctypes.byref(root_ret), ctypes.byref(child_ret),
-            ctypes.byref(root_x), ctypes.byref(root_y),
-            ctypes.byref(win_x), ctypes.byref(win_y),
-            ctypes.byref(mask_ret),
-        )
-        if ok:
-            self._pos_x = root_x.value - INDICATOR_SIZE // 2
-            self._pos_y = root_y.value - INDICATOR_OFFSET_Y
+
+        target_x, target_y = None, None
+        if self._caret_tracker:
+            pos = self._caret_tracker.get_position()
+            if pos:
+                target_x, target_y = pos
+                self.logger.log(f"CursorIndicator: using caret position ({target_x}, {target_y})")
+
+        if target_x is None:
+            root_ret = ctypes.c_ulong()
+            child_ret = ctypes.c_ulong()
+            root_x = ctypes.c_int()
+            root_y = ctypes.c_int()
+            win_x = ctypes.c_int()
+            win_y = ctypes.c_int()
+            mask_ret = ctypes.c_uint()
+            ok = self.libx11.XQueryPointer(
+                self.display, self.root,
+                ctypes.byref(root_ret), ctypes.byref(child_ret),
+                ctypes.byref(root_x), ctypes.byref(root_y),
+                ctypes.byref(win_x), ctypes.byref(win_y),
+                ctypes.byref(mask_ret),
+            )
+            if ok:
+                target_x = root_x.value
+                target_y = root_y.value
+                self.logger.log(f"CursorIndicator: using mouse position ({target_x}, {target_y})")
+
+        if target_x is not None:
+            self._pos_x = target_x - INDICATOR_SIZE // 2
+            self._pos_y = target_y - INDICATOR_OFFSET_Y
+
         self.libx11.XMoveWindow(self.display, self._window, self._pos_x, self._pos_y)
-        self._draw_static_indicator()
         self._visible = True
         self.libx11.XMapWindow(self.display, self._window)
+        self._draw_static_indicator()
         self.logger.log("CursorIndicator: shown")
 
     def hide(self):
@@ -441,6 +616,9 @@ class CursorIndicator:
         self.logger.log("CursorIndicator: hidden")
 
     def destroy(self):
+        if self._window_gc:
+            self.libx11.XFreeGC(self.display, self._window_gc)
+            self._window_gc = None
         if self._shape_gc:
             self.libx11.XFreeGC(self.display, self._shape_gc)
             self._shape_gc = None

@@ -1039,6 +1039,7 @@ class X11HotkeyDaemon:
         self.recording_active = False
         self.display = None
         self.root = None
+        self._caret_tracker = None
         self.space_keycode = None
         self.control_left_keycode = None
         self.control_right_keycode = None
@@ -1110,12 +1111,15 @@ class X11HotkeyDaemon:
         self._indicator = None
         if self.indicator:
             try:
-                from whisper_hotkey.indicator import CursorIndicator
+                from whisper_hotkey.indicator import CaretTracker, CursorIndicator
+                self._caret_tracker = CaretTracker(logger=self.logger)
+                self._caret_tracker.start()
                 self._indicator = CursorIndicator(
                     libx11=self.libx11,
                     display=self.display,
                     root_window=self.root,
                     logger=self.logger,
+                    caret_tracker=self._caret_tracker,
                 )
             except Exception as exc:
                 self.logger.log(f"CursorIndicator init failed: {exc}")
@@ -1196,6 +1200,9 @@ class X11HotkeyDaemon:
             if self._indicator:
                 self._indicator.destroy()
                 self._indicator = None
+            if self._caret_tracker:
+                self._caret_tracker.stop()
+                self._caret_tracker = None
             self.ungrab()
             self.libx11.XCloseDisplay(self.display)
             self.display = None
