@@ -1,0 +1,15 @@
+[Unit]
+Description=Whisper Hotkey Daemon
+After=graphical-session.target
+
+[Service]
+Type=simple
+Restart=on-failure
+RestartSec=5
+ExecStartPre=/bin/rm -f /tmp/whisper_hotkey.lock
+ExecStart=/home/jon/code/easy-local-whisper-hotkey/.venv/bin/python -m whisper_hotkey
+WorkingDirectory=/home/jon/code/easy-local-whisper-hotkey
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=default.target
