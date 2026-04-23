@@ -2,8 +2,8 @@ import ctypes
 import math
 import threading
 
-INDICATOR_SIZE = 14
-INDICATOR_OFFSET_Y = 24
+INDICATOR_SIZE = 28
+INDICATOR_OFFSET_Y = 36
 
 STATE_IDLE = "idle"
 STATE_RECORDING = "recording"
@@ -79,11 +79,13 @@ class CaretTracker:
             char_count = src.get_character_count()
             if offset < 0:
                 return
+            if char_count == 0:
+                return
             if offset >= char_count:
                 offset = max(0, char_count - 1)
-            rect = src.get_character_extents(offset, 0)
+            rect = src.get_character_extents(offset, 0)  # 0 = Atspi.CoordType.SCREEN (screen coordinates)
             x, y, width, height = rect.x, rect.y, rect.width, rect.height
-            if x <= -2147483648 or y <= -2147483648:
+            if x <= -2147483648 or y <= -2147483648 or width <= 0 or height <= 0:
                 return
             with self._lock:
                 self._x = x
@@ -103,11 +105,13 @@ class CaretTracker:
             char_count = src.get_character_count()
             if offset < 0:
                 return
+            if char_count == 0:
+                return
             if offset >= char_count:
                 offset = max(0, char_count - 1)
-            rect = src.get_character_extents(offset, 0)
+            rect = src.get_character_extents(offset, 0)  # 0 = Atspi.CoordType.SCREEN (screen coordinates)
             x, y, width, height = rect.x, rect.y, rect.width, rect.height
-            if x <= -2147483648 or y <= -2147483648:
+            if x <= -2147483648 or y <= -2147483648 or width <= 0 or height <= 0:
                 return
             with self._lock:
                 self._x = x + width
@@ -504,8 +508,8 @@ class CursorIndicator:
         size = INDICATOR_SIZE
         center = size / 2
         max_r = size / 2 - 1
-        base_r, base_g, base_b = 14, 165, 233
-        bright_r, bright_g, bright_b = 125, 211, 252
+        base_r, base_g, base_b = 220, 38, 38
+        bright_r, bright_g, bright_b = 255, 100, 100
 
         clear = _XRenderColor(red=0, green=0, blue=0, alpha=0)
         self._libxrender.XRenderFillRectangle(
@@ -522,7 +526,7 @@ class CursorIndicator:
                     continue
 
                 t = dist / max_r
-                falloff = max(0.0, 1.0 - t ** 1.5) * 0.92
+                falloff = max(0.0, 1.0 - t ** 1.2)
 
                 r = int(bright_r + (base_r - bright_r) * t)
                 g = int(bright_g + (base_g - bright_g) * t)
@@ -549,7 +553,7 @@ class CursorIndicator:
             self.display, self._window, self._window_gc,
             0, 0, INDICATOR_SIZE, INDICATOR_SIZE,
         )
-        self.libx11.XSetForeground(self.display, self._window_gc, 65535)
+        self.libx11.XSetForeground(self.display, self._window_gc, 0xDC2626)
         self.libx11.XFillArc(
             self.display, self._window, self._window_gc,
             1, 1, INDICATOR_SIZE - 2, INDICATOR_SIZE - 2,
@@ -558,7 +562,39 @@ class CursorIndicator:
         self.libx11.XSync(self.display, 0)
 
     def tick(self):
-        pass
+        if not self._visible or not self._window:
+            return
+        self._pulse_phase = getattr(self, '_pulse_phase', 0.0) + 0.15
+        if self._pulse_phase >= 2 * math.pi:
+            self._pulse_phase -= 2 * math.pi
+        scale = 0.85 + 0.15 * math.sin(self._pulse_phase)
+        if scale >= 0.95:
+            return
+        border = int(INDICATOR_SIZE * (1.0 - scale) / 2)
+        if border < 1:
+            return
+        self.libx11.XMoveWindow(
+            self.display, self._window,
+            self._pos_x + border, self._pos_y + border,
+        )
+        if self._ext_shape and self._libxext and self._shape_pixmap:
+            inner = INDICATOR_SIZE - 2 * border
+            if inner > 2:
+                self.libx11.XSetForeground(self.display, self._shape_gc, 0)
+                self.libx11.XFillRectangle(
+                    self.display, self._shape_pixmap, self._shape_gc,
+                    0, 0, INDICATOR_SIZE, INDICATOR_SIZE,
+                )
+                self.libx11.XSetForeground(self.display, self._shape_gc, 1)
+                self.libx11.XFillArc(
+                    self.display, self._shape_pixmap, self._shape_gc,
+                    border, border, inner, inner,
+                    0, 360 * 64,
+                )
+                self._libxext.XShapeCombineMask(
+                    self.display, self._window, SHAPE_BOUNDING, 0, 0,
+                    self._shape_pixmap, SHAPE_SET,
+                )
 
     def show(self):
         if not self._window:
@@ -605,15 +641,37 @@ class CursorIndicator:
         if not self._window:
             return
         self._visible = False
+        self._pulse_phase = 0.0
         if self._picture and self._ext_render and self._libxrender:
             clear = _XRenderColor(red=0, green=0, blue=0, alpha=0)
             self._libxrender.XRenderFillRectangle(
                 self.display, PICT_OP_SRC, self._picture,
                 ctypes.byref(clear), 0, 0, INDICATOR_SIZE, INDICATOR_SIZE,
             )
+        self._restore_shape()
+        self.libx11.XMoveWindow(self.display, self._window, self._pos_x, self._pos_y)
         self.libx11.XUnmapWindow(self.display, self._window)
         self.libx11.XSync(self.display, 0)
         self.logger.log("CursorIndicator: hidden")
+
+    def _restore_shape(self):
+        if not self._ext_shape or not self._libxext or not self._shape_pixmap:
+            return
+        self.libx11.XSetForeground(self.display, self._shape_gc, 0)
+        self.libx11.XFillRectangle(
+            self.display, self._shape_pixmap, self._shape_gc,
+            0, 0, INDICATOR_SIZE, INDICATOR_SIZE,
+        )
+        self.libx11.XSetForeground(self.display, self._shape_gc, 1)
+        self.libx11.XFillArc(
+            self.display, self._shape_pixmap, self._shape_gc,
+            0, 0, INDICATOR_SIZE, INDICATOR_SIZE,
+            0, 360 * 64,
+        )
+        self._libxext.XShapeCombineMask(
+            self.display, self._window, SHAPE_BOUNDING, 0, 0,
+            self._shape_pixmap, SHAPE_SET,
+        )
 
     def destroy(self):
         if self._window_gc:

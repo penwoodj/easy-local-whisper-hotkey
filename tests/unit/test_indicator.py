@@ -413,8 +413,8 @@ class CursorIndicatorTests(unittest.TestCase):
 
         mock_caret_tracker.get_position.assert_called_once()
         self.mock_libx11.XQueryPointer.assert_not_called()
-        self.assertEqual(indicator._pos_x, 93)
-        self.assertEqual(indicator._pos_y, 176)
+        self.assertEqual(indicator._pos_x, 86)
+        self.assertEqual(indicator._pos_y, 164)
         self.mock_libx11.XMoveWindow.assert_called_once()
         self.mock_libx11.XMapWindow.assert_called_once()
 
