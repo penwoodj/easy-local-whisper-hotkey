@@ -117,28 +117,28 @@ def test_api_health():
     """Verify API health endpoint works."""
     print("TEST: API health endpoint")
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        context = browser.new_context()
+        request_context = p.request.new_context()
+        response = request_context.get(f"{API_URL}/api/health")
         
-        # Direct API call via fetch in browser
-        page = context.new_page()
-        response = page.evaluate(f"fetch('{API_URL}/api/health').then(r => r.json())")
+        assert response.ok, f"API health endpoint failed: {response.status}"
+        data = response.json()
         
-        assert response.get("status") == "ok", "API should return OK"
-        assert "version" in response, "API should return version"
+        assert data.get("status") == "ok", "API should return OK"
+        assert "version" in data, "API should return version"
         
-        print(f"✓ API health: {response}")
-        browser.close()
+        print(f"✓ API health: {data}")
+        request_context.dispose()
 
 
 def test_api_config():
     """Verify GET /api/config returns config."""
     print("TEST: API config endpoint")
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
+        request_context = p.request.new_context()
+        response = request_context.get(f"{API_URL}/api/config")
         
-        response = page.evaluate(f"fetch('{API_URL}/api/config').then(r => r.json())")
+        assert response.ok, f"API config endpoint failed: {response.status}"
+        data = response.json()
         
         # Should have all config keys
         required_keys = [
@@ -146,61 +146,64 @@ def test_api_config():
             "WHISPER_CHUNK_SECONDS", "WHISPER_LOG_FILE", "WHISPER_ACTIVATION_MODE"
         ]
         for key in required_keys:
-            assert key in response, f"Config should have {key} key"
+            assert key in data, f"Config should have {key} key"
         
-        print(f"✓ API config returned {len(response)} keys")
-        browser.close()
+        print(f"✓ API config returned {len(data)} keys")
+        request_context.dispose()
 
 
 def test_api_status():
     """Verify GET /api/status returns status."""
     print("TEST: API status endpoint")
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
+        request_context = p.request.new_context()
+        response = request_context.get(f"{API_URL}/api/status")
         
-        response = page.evaluate(f"fetch('{API_URL}/api/status').then(r => r.json())")
+        assert response.ok, f"API status endpoint failed: {response.status}"
+        data = response.json()
         
         # Should have status fields
-        assert "is_running" in response, "Status should have is_running"
-        assert "stream_text" in response, "Status should have stream_text"
+        assert "is_running" in data, "Status should have is_running"
+        assert "stream_text" in data, "Status should have stream_text"
         
-        print(f"✓ API status: running={response.get('is_running')}")
-        browser.close()
+        print(f"✓ API status: running={data.get('is_running')}")
+        request_context.dispose()
 
 
 def test_api_diagnostics():
     """Verify GET /api/diagnostics returns system info."""
     print("TEST: API diagnostics endpoint")
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
+        request_context = p.request.new_context()
+        response = request_context.get(f"{API_URL}/api/diagnostics")
         
-        response = page.evaluate(f"fetch('{API_URL}/api/diagnostics').then(r => r.json())")
+        assert response.ok, f"API diagnostics endpoint failed: {response.status}"
+        data = response.json()
         
         # Should have diagnostic fields
-        assert "healthy" in response, "Diagnostics should have healthy"
-        assert "model_exists" in response, "Diagnostics should check model"
-        assert "commands" in response, "Diagnostics should check commands"
+        assert "healthy" in data, "Diagnostics should have healthy"
+        assert "model_exists" in data, "Diagnostics should check model"
+        assert "commands" in data, "Diagnostics should check commands"
         
-        print(f"✓ API diagnostics: healthy={response.get('healthy')}")
-        browser.close()
+        print(f"✓ API diagnostics: healthy={data.get('healthy')}")
+        request_context.dispose()
 
 
 def test_api_sources():
     """Verify GET /api/sources returns audio sources."""
     print("TEST: API sources endpoint")
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
+        request_context = p.request.new_context()
+        response = request_context.get(f"{API_URL}/api/sources")
         
-        response = page.evaluate(f"fetch('{API_URL}/api/sources').then(r => r.json())")
+        assert response.ok, f"API sources endpoint failed: {response.status}"
+        data = response.json()
         
         # Should return list (may be empty on CI)
-        assert isinstance(response, list), "Sources should be a list"
+        assert isinstance(data, list), "Sources should be a list"
         
-        print(f"✓ API sources returned {len(response)} sources")
-        browser.close()
+        print(f"✓ API sources returned {len(data)} sources")
+        request_context.dispose()
 
 
 def run_all_tests():
