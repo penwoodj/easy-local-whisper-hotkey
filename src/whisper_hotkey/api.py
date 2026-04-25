@@ -110,6 +110,15 @@ def update_config(config: dict[str, Any]) -> dict[str, Any]:
     return get_config()
 
 
+@api.get("/api/health")
+def health_check() -> dict[str, Any]:
+    """Simple health check."""
+    return {
+        "status": "ok",
+        "version": "0.1.0",
+    }
+
+
 @api.get("/api/status")
 def get_status() -> dict[str, Any]:
     """Get daemon status."""
@@ -228,17 +237,18 @@ def list_sources() -> list[str]:
 @api.get("/api/diagnostics")
 def get_diagnostics() -> dict[str, Any]:
     """Get full system diagnostics."""
-    config = get_config()
-
-    # Build model and whisper_cli paths
-    model_path = Path(config.get("WHISPER_MODEL", "")).expanduser()
-    whisper_cli_path = Path(config.get("WHISPER_CLI", "")).expanduser()
-
-    # Get preferred sources
-    preferred_sources_str = config.get("WHISPER_PREFERRED_SOURCES", "")
-    preferred_sources = whisper_app.parse_preferred_sources(preferred_sources_str)
-
     try:
+        config = get_config()
+
+        # Build model and whisper_cli paths
+        model_path = Path(config.get("WHISPER_MODEL", "")).expanduser()
+        whisper_cli_path = Path(config.get("WHISPER_CLI", "")).expanduser()
+
+        # Get preferred sources
+        preferred_sources_str = config.get("WHISPER_PREFERRED_SOURCES", "")
+        preferred_sources = whisper_app.parse_preferred_sources(preferred_sources_str)
+
+        # Get diagnostics from app module with error handling
         diagnostics = whisper_app.collect_diagnostics(model_path, whisper_cli_path, preferred_sources)
 
         # Add config values
@@ -254,19 +264,16 @@ def get_diagnostics() -> dict[str, Any]:
         diagnostics["direct_streaming"] = config.get("WHISPER_DIRECT_STREAMING", False)
         diagnostics["log_file"] = config.get("WHISPER_LOG_FILE", "")
 
-        # Add version
-        from . import __version__
-        diagnostics["version"] = __version__.__version__
+        # Add version (hardcoded for API)
+        diagnostics["version"] = "0.1.0"
 
-        # Determine overall health
-        healthy = (
-            diagnostics.get("model_exists", False)
-            and diagnostics.get("whisper_cli_exists", False)
-            and bool(diagnostics.get("display", ""))
-            and diagnostics.get("commands", {}).get("parec", False)
-            and diagnostics.get("commands", {}).get("pactl", False)
-            and diagnostics.get("commands", {}).get("xdotool", False)
-            and "resolved_source_error" not in diagnostics
+        return diagnostics
+
+    except Exception as e:
+        logger.error(f"Failed to collect diagnostics: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Diagnostics collection failed: {str(e)}"
         )
         diagnostics["healthy"] = healthy
 
