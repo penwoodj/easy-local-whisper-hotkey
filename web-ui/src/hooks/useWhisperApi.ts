@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import * as api from '../api/client';
+import type * as api from '../api/client';
 import type { WhisperConfig, WhisperStatus } from '../api/types';
 
 export function useWhisperApi() {
