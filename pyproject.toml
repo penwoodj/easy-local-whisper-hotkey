@@ -26,7 +26,10 @@ classifiers = [
   "Topic :: Multimedia :: Sound/Audio :: Speech",
   "Topic :: Utilities",
 ]
-dependencies = []
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.34",
+]
 
 [project.optional-dependencies]
 dev = [
