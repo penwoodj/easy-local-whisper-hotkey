@@ -1,13 +1,16 @@
 [Unit]
 Description=Whisper Hotkey Dictation Daemon
-After=default.target
+After=pipewire.service pulseaudio.service default.target
 
 [Service]
 Type=simple
 EnvironmentFile=-%h/.config/whisper-hotkey/whisper-hotkey.env
+ExecStartPre=/bin/sleep 5
 ExecStart=%h/.local/bin/whisper-hotkey run
 Restart=on-failure
-RestartSec=2
+RestartSec=5
+StartLimitIntervalSec=120
+StartLimitBurst=5
 
 [Install]
 WantedBy=default.target
