@@ -255,8 +255,7 @@ def get_diagnostics() -> dict[str, Any]:
         diagnostics["log_file"] = config.get("WHISPER_LOG_FILE", "")
 
         # Add version
-        from . import __version__
-        diagnostics["version"] = __version__.__version__
+        diagnostics["version"] = "0.1.0"
 
         # Determine overall health
         healthy = (
@@ -310,10 +309,9 @@ async def sse_events() -> StreamingResponse:
 @api.get("/api/health")
 def health_check() -> dict[str, Any]:
     """Simple health check."""
-    from . import __version__
     return {
         "status": "ok",
-        "version": __version__.__version__,
+        "version": "0.1.0",
     }
 
 
