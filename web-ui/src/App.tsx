@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useWhisperApi } from './hooks/useWhisperApi';
 import { Mic, Settings, Activity } from 'lucide-react';
+import { ConfigurationPanel } from './components/ConfigurationPanel';
 
 type Tab = 'status' | 'config' | 'diagnostics';
 
@@ -25,6 +26,7 @@ export default function App() {
 
         <div className="flex gap-2 mb-6 border-b border-gray-700 pb-4">
           <button
+            type="button"
             onClick={() => setActiveTab('status')}
             className={`flex items-center gap-2 px-4 py-2 rounded-lg transition ${
               activeTab === 'status'
@@ -36,6 +38,7 @@ export default function App() {
             <span>Status</span>
           </button>
           <button
+            type="button"
             onClick={() => setActiveTab('config')}
             className={`flex items-center gap-2 px-4 py-2 rounded-lg transition ${
               activeTab === 'config'
@@ -47,6 +50,7 @@ export default function App() {
             <span>Configuration</span>
           </button>
           <button
+            type="button"
             onClick={() => setActiveTab('diagnostics')}
             className={`flex items-center gap-2 px-4 py-2 rounded-lg transition ${
               activeTab === 'diagnostics'
@@ -68,11 +72,11 @@ export default function App() {
               </div>
               <div className="flex gap-4">
                 {!api.status.is_running ? (
-                  <button onClick={api.startDaemon} className="px-6 py-3 bg-green-600 hover:bg-green-700 text-white rounded-lg font-medium">
+                  <button type="button" onClick={api.startDaemon} className="px-6 py-3 bg-green-600 hover:bg-green-700 text-white rounded-lg font-medium">
                     Start Daemon
                   </button>
                 ) : (
-                  <button onClick={api.stopDaemon} className="px-6 py-3 bg-red-600 hover:bg-red-700 text-white rounded-lg font-medium">
+                  <button type="button" onClick={api.stopDaemon} className="px-6 py-3 bg-red-600 hover:bg-red-700 text-white rounded-lg font-medium">
                     Stop Daemon
                   </button>
                 )}
@@ -85,12 +89,7 @@ export default function App() {
               )}
             </div>
           )}
-          {activeTab === 'config' && (
-            <div>
-              <h2 className="text-xl font-semibold mb-4 text-white">Configuration Panel</h2>
-              <p className="text-gray-400">Configuration editor coming soon...</p>
-            </div>
-          )}
+          {activeTab === 'config' && <ConfigurationPanel />}
           {activeTab === 'diagnostics' && (
             <div>
               <h2 className="text-xl font-semibold mb-4 text-white">Diagnostics</h2>

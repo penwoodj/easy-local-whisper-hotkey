@@ -15,6 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse
 
 from .config_store import load_config, save_config, default_config, CONFIG_SCHEMA
+from .daemon_state import get_daemon_state
 from . import app as whisper_app
 
 # Configure logging
@@ -28,20 +29,14 @@ api = FastAPI(
     description="REST API for easy-local-whisper-hotkey speech-to-text system"
 )
 
-# CORS middleware for local development
+# Add CORS middleware
 api.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:5174", "http://localhost:8420"],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# Daemon state (thread-safe)
-_daemon_lock = threading.Lock()
-_daemon_process: subprocess.Popen | None = None
-_daemon_started_at: str | None = None
-_last_transcription: str = ""
 
 
 def forward_config_args(config: dict[str, Any]) -> list[str]:
@@ -122,105 +117,42 @@ def health_check() -> dict[str, Any]:
 @api.get("/api/status")
 def get_status() -> dict[str, Any]:
     """Get daemon status."""
-    with _daemon_lock:
-        is_running = _daemon_process is not None
-
-        # Check if process still alive
-        if is_running and _daemon_process:
-            try:
-                _daemon_process.poll()
-                if _daemon_process.returncode is not None:
-                    # Process exited
-                    _daemon_process = None
-                    _daemon_started_at = None
-                    is_running = False
-            except Exception:
-                pass
-
-        return {
-            "is_running": is_running,
-            "pid": _daemon_process.pid if _daemon_process else None,
-            "last_started": _daemon_started_at,
-            "stream_text": _last_transcription,
-        }
+    daemon_state = get_daemon_state()
+    return daemon_state.get_status()
 
 
 @api.post("/api/daemon/start")
-def start_daemon() -> dict[str, Any]:
-    """Start the daemon subprocess."""
-    with _daemon_lock:
-        if _daemon_process is not None:
-            # Check if still alive
-            try:
-                _daemon_process.poll()
-                if _daemon_process.returncode is None:
-                    raise HTTPException(status_code=409, detail="Daemon already running")
-            except Exception:
-                _daemon_process = None
+def start_daemon(args: list[str] = []) -> dict[str, Any]:
+    """Start daemon subprocess."""
+    daemon_state = get_daemon_state()
 
-        # Load current config
-        config = get_config()
-        args = forward_config_args(config)
+    # Load current config and build CLI args
+    config = load_config()
+    args = forward_config_args(config)
 
-        logger.info(f"Starting daemon with args: {' '.join(args)}")
+    logger.info(f"Starting daemon with args: {' '.join(args)}")
 
-        try:
-            # Spawn daemon process
-            _daemon_process = subprocess.Popen(
-                ["easy-local-whisper-hotkey", "run"] + args,
-                start_new_session=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-            )
-
-            _daemon_started_at = datetime.now().isoformat()
-
-            logger.info(f"Daemon started with PID {_daemon_process.pid}")
-
-            return {
-                "started": True,
-                "pid": _daemon_process.pid,
-            }
-
-        except Exception as e:
-            logger.error(f"Failed to start daemon: {e}")
-            raise HTTPException(status_code=500, detail=f"Failed to start daemon: {e}")
+    try:
+        return daemon_state.start(args)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to start daemon: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to start daemon: {e}")
 
 
 @api.post("/api/daemon/stop")
 def stop_daemon() -> dict[str, Any]:
     """Stop the daemon subprocess."""
-    with _daemon_lock:
-        if _daemon_process is None:
-            raise HTTPException(status_code=404, detail="Daemon not running")
+    daemon_state = get_daemon_state()
 
-        try:
-            _daemon_process.poll()
-            if _daemon_process.returncode is not None:
-                raise HTTPException(status_code=404, detail="Daemon not running (already stopped)")
-
-            # Send SIGTERM
-            _daemon_process.terminate()
-
-            # Wait up to 5 seconds
-            try:
-                _daemon_process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                logger.warning("Daemon did not stop gracefully, sending SIGKILL")
-                _daemon_process.kill()
-                _daemon_process.wait()
-
-            _daemon_process = None
-            _daemon_started_at = None
-            _last_transcription = ""
-
-            logger.info("Daemon stopped")
-
-            return {"stopped": True}
-
-        except Exception as e:
-            logger.error(f"Failed to stop daemon: {e}")
-            raise HTTPException(status_code=500, detail=f"Failed to stop daemon: {e}")
+    try:
+        return daemon_state.stop()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to stop daemon: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to stop daemon: {e}")
 
 
 @api.get("/api/sources")
@@ -266,16 +198,7 @@ def get_diagnostics() -> dict[str, Any]:
 
         # Add version (hardcoded for API)
         diagnostics["version"] = "0.1.0"
-
-        return diagnostics
-
-    except Exception as e:
-        logger.error(f"Failed to collect diagnostics: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Diagnostics collection failed: {str(e)}"
-        )
-        diagnostics["healthy"] = healthy
+        diagnostics["healthy"] = True
 
         return diagnostics
 
@@ -286,16 +209,17 @@ def get_diagnostics() -> dict[str, Any]:
 
 async def event_generator() -> None:
     """SSE event generator."""
+    daemon_state = get_daemon_state()
+
     while True:
         try:
             # Send status update
             status = get_status()
             yield f"event: status\ndata: {status}\n\n"
 
-            # TODO: Parse log file for transcription updates
-            # For now, just send what we have
-            if _last_transcription:
-                yield f"event: transcription\ndata: {{'text': '{_last_transcription}'}}\n\n"
+            # Send transcription if available
+            if daemon_state._last_transcription:
+                yield f"event: transcription\ndata: {{'text': '{daemon_state._last_transcription}'}}\n\n"
 
         except Exception as e:
             logger.error(f"Error in SSE generator: {e}")
