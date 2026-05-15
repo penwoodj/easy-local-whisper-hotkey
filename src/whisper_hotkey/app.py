@@ -1203,6 +1203,8 @@ class X11HotkeyDaemon:
             if self._caret_tracker:
                 self._caret_tracker.stop()
                 self._caret_tracker = None
+            if self._recorder:
+                self._recorder.stop()
             self.ungrab()
             self.libx11.XCloseDisplay(self.display)
             self.display = None

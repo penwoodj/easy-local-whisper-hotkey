@@ -39,6 +39,27 @@ class CaretTracker:
         self._caret_listener = None
         self._focus_listener = None
 
+    @staticmethod
+    def _ensure_accessibility(logger):
+        """Ensure desktop accessibility is enabled for caret event flow."""
+        try:
+            import subprocess
+            result = subprocess.run(
+                ["gsettings", "get", "org.gnome.desktop.interface", "toolkit-accessibility"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if "false" in (result.stdout or "").lower():
+                logger.log("CaretTracker: accessibility disabled — enabling toolkit-accessibility")
+                subprocess.run(
+                    ["gsettings", "set", "org.gnome.desktop.interface",
+                     "toolkit-accessibility", "true"],
+                    capture_output=True, text=True, timeout=5,
+                )
+            elif "true" in (result.stdout or "").lower():
+                logger.log("CaretTracker: accessibility already enabled")
+        except Exception as exc:
+            logger.log(f"CaretTracker: could not check/enable accessibility: {exc}")
+
     def start(self):
         try:
             import gi
@@ -47,6 +68,7 @@ class CaretTracker:
         except (ImportError, ValueError) as exc:
             self.logger.log(f"CaretTracker: AT-SPI unavailable ({exc}), using mouse fallback")
             return
+        self._ensure_accessibility(self.logger)
         self._running = True
         self._thread = threading.Thread(target=self._run_loop, daemon=True)
         self._thread.start()
@@ -83,7 +105,8 @@ class CaretTracker:
                 return
             if offset >= char_count:
                 offset = max(0, char_count - 1)
-            rect = src.get_character_extents(offset, 0)  # 0 = Atspi.CoordType.SCREEN (screen coordinates)
+
+            rect = src.get_character_extents(offset, 0)  # 0 = Atspi.CoordType.SCREEN
             x, y, width, height = rect.x, rect.y, rect.width, rect.height
             if x <= -2147483648 or y <= -2147483648 or width <= 0 or height <= 0:
                 return
