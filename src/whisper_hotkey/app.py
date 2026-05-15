@@ -362,6 +362,29 @@ def resolve_audio_source(
     return sources[0]
 
 
+def resolve_audio_source_with_retry(
+    preferred_source: str,
+    preferred_sources: list[str],
+    logger: Logger | None = None,
+    max_retries: int = 6,
+    retry_delay: float = 5.0,
+) -> str:
+    source = resolve_audio_source(preferred_source, preferred_sources, logger)
+    attempts = 0
+    while "auto_null" in source and attempts < max_retries:
+        attempts += 1
+        if logger is not None:
+            logger.log(
+                f"Audio source is auto_null (PipeWire not ready), "
+                f"retrying in {retry_delay}s (attempt {attempts}/{max_retries})"
+            )
+        time.sleep(retry_delay)
+        source = resolve_audio_source(preferred_source, preferred_sources, logger)
+    if "auto_null" in source and logger is not None:
+        logger.log(f"WARNING: still on auto_null after {max_retries} retries")
+    return source
+
+
 def collect_diagnostics(model: Path, whisper_cli: Path, preferred_sources: list[str]) -> dict[str, object]:
     commands = {
         "parec": bool(shutil_which("parec")),
@@ -1205,6 +1228,7 @@ class X11HotkeyDaemon:
                 self._caret_tracker = None
             if self._recorder:
                 self._recorder.stop()
+                self._recorder.cleanup()
             self.ungrab()
             self.libx11.XCloseDisplay(self.display)
             self.display = None
@@ -1608,7 +1632,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     try:
         ensure_dependencies(model, whisper_cli)
-        source = resolve_audio_source(args.source, preferred_sources, logger)
+        source = resolve_audio_source_with_retry(args.source, preferred_sources, logger)
         if args.test is not None:
             return run_once(
                 whisper_cli=whisper_cli,
