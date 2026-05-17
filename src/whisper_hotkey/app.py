@@ -1449,7 +1449,7 @@ class X11HotkeyDaemon:
             return
 
         # Before creating new Recorder, ensure any previous session is fully cleaned up
-        if self._recorder is not None:
+        if hasattr(self, "_recorder") and self._recorder is not None:
             self.logger.log("Warning: previous recorder still exists, cleaning up")
             try:
                 self._recorder.stop()
@@ -1457,7 +1457,7 @@ class X11HotkeyDaemon:
             except Exception:
                 pass
             self._recorder = None
-        if self._transcriber is not None:
+        if hasattr(self, "_transcriber") and self._transcriber is not None:
             self.logger.log("Warning: previous transcriber still exists, cleaning up")
             try:
                 self._transcriber.finish()
