@@ -64,9 +64,9 @@ Create the user service directory and copy the service file:
 
 ```bash
 mkdir -p ~/.config/systemd/user
-cp packaging/systemd/easy-local-whisper-hotkey.service ~/.config/systemd/user/
+cp packaging/systemd/whisper-hotkey.service ~/.config/systemd/user/
 systemctl --user daemon-reload
-systemctl --user enable --now easy-local-whisper-hotkey.service
+systemctl --user enable --now whisper-hotkey.service
 ```
 
 This starts the application automatically on login.
@@ -145,7 +145,7 @@ This confirms:
 
 ```bash
 mkdir -p ~/.config/systemd/user
-cp packaging/systemd/easy-local-whisper-hotkey.service ~/.config/systemd/user/
+cp packaging/systemd/whisper-hotkey.service ~/.config/systemd/user/
 systemctl --user daemon-reload
-systemctl --user enable --now easy-local-whisper-hotkey.service
+systemctl --user enable --now whisper-hotkey.service
 ```

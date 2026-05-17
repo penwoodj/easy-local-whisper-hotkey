@@ -9,9 +9,9 @@ rm -f "$HOME/.config/systemd/user/whisper-hotkey.service"
 systemctl --user daemon-reload || true
 
 if command -v pipx >/dev/null 2>&1; then
-  pipx uninstall whisper-hotkey || true
+  pipx uninstall easy-local-whisper-hotkey || true
 else
-  python3 -m pip uninstall -y whisper-hotkey || true
+  python3 -m pip uninstall -y easy-local-whisper-hotkey || true
 fi
 
 echo "Removed whisper-hotkey package and user service."

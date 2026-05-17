@@ -1,16 +1,14 @@
 [Unit]
 Description=Whisper Ctrl+Space Dictation Daemon
-After=pipewire.service pulseaudio.service default.target
+After=pipewire.service pulseaudio.service docker.service default.target
 
 [Service]
 Type=simple
 Environment=DISPLAY=:0.0
 Environment=XAUTHORITY=%h/.Xauthority
-Environment=PYTHONPATH=%h/code/easy-local-whisper-hotkey/src
 EnvironmentFile=-%h/.config/whisper-hotkey/whisper-hotkey.env
-WorkingDirectory=%h/code/easy-local-whisper-hotkey
 ExecStartPre=/bin/sleep 5
-ExecStart=%h/code/easy-local-whisper-hotkey/.venv/bin/python3 -m whisper_hotkey run
+ExecStart=%h/.local/bin/easy-local-whisper-hotkey run
 Restart=on-failure
 RestartSec=10
 

@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-SERVICE_SOURCE="$PROJECT_ROOT/scripts/whisper-hotkey.service"
+SERVICE_SOURCE="$PROJECT_ROOT/packaging/systemd/whisper-hotkey.service"
 SERVICE_DEST="$HOME/.config/systemd/user/whisper-hotkey.service"
 
 mkdir -p "$HOME/.config/systemd/user"
