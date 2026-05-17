@@ -46,6 +46,7 @@ SAMPLE_RATE = 16000
 CHANNELS = 1
 SAMPLE_WIDTH = 2
 BYTES_PER_SECOND = SAMPLE_RATE * CHANNELS * SAMPLE_WIDTH
+MAX_RECORDING_BYTES = 100 * 1024 * 1024  # 100MB max recording (~52 minutes at 32KB/s)
 
 KEY_PRESS = 2
 KEY_RELEASE = 3
@@ -105,8 +106,11 @@ class Logger:
         timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
         line = f"[{timestamp}] {message}\n"
         with self._lock:
-            with self.path.open("a", encoding="utf-8") as handle:
-                handle.write(line)
+            try:
+                with self.path.open("a", encoding="utf-8") as handle:
+                    handle.write(line)
+            except OSError:
+                pass  # ENOSPC or other disk errors — never crash the daemon
 
 
 class SingleInstance:
@@ -543,6 +547,9 @@ class Recorder:
                 handle.flush()
                 with self.lock:
                     self.bytes_written += len(chunk)
+                    if self.bytes_written >= MAX_RECORDING_BYTES:
+                        self.logger.log(f"Recording reached {MAX_RECORDING_BYTES} byte limit, stopping")
+                        break
 
     def _consume_stderr(self) -> None:
         assert self.proc is not None and self.proc.stderr is not None
@@ -1269,7 +1276,7 @@ class X11HotkeyDaemon:
 
         if processed != self._session_text:
             self.logger.log(f"Post-processing complete. Diff: {processed[:50]}...")
-            subprocess.run(["xdotool", "type", processed], check=True)
+            subprocess.run(["xdotool", "type", processed], check=True, timeout=5)
         else:
             self.logger.log("Post-processing: no changes made")
 
@@ -1313,11 +1320,23 @@ class X11HotkeyDaemon:
 
     def drain_pending_events(self) -> None:
         event = XEvent()
-        while self.libx11.XPending(self.display) > 0:
+        count = 0
+        while self.libx11.XPending(self.display) > 0 and count < 50:
             self.libx11.XNextEvent(self.display, ctypes.byref(event))
+            count += 1
+
+    def _cleanup_stale_temp_files(self) -> None:
+        import glob
+        for path in glob.glob("/tmp/whisper_stream_*.s16le"):
+            try:
+                Path(path).unlink()
+                self.logger.log(f"Cleaned up stale temp file: {path}")
+            except Exception:
+                pass
 
     def run(self) -> None:
         self.open()
+        self._cleanup_stale_temp_files()
         self.grab()
         mode_label = "toggle" if self.activation_mode == "toggle" else "hold"
         print(f"Whisper Ctrl+Space daemon is listening. Mode: {mode_label}.")
@@ -1394,6 +1413,24 @@ class X11HotkeyDaemon:
                 self._transcriber = None
             return
 
+        # Before creating new Recorder, ensure any previous session is fully cleaned up
+        if self._recorder is not None:
+            self.logger.log("Warning: previous recorder still exists, cleaning up")
+            try:
+                self._recorder.stop()
+                self._recorder.cleanup()
+            except Exception:
+                pass
+            self._recorder = None
+        if self._transcriber is not None:
+            self.logger.log("Warning: previous transcriber still exists, cleaning up")
+            try:
+                self._transcriber.finish()
+                self._transcriber.join(timeout=2)
+            except Exception:
+                pass
+            self._transcriber = None
+
         self.recording_active = True
         self._recorder = Recorder(self.source, self.logger)
         self._transcriber = Transcriber(
@@ -1423,8 +1460,10 @@ class X11HotkeyDaemon:
 
         while self.running and self.recording_active:
             event = XEvent()
-            while self.libx11.XPending(self.display) > 0:
+            count = 0
+            while self.libx11.XPending(self.display) > 0 and count < 20:
                 self.libx11.XNextEvent(self.display, ctypes.byref(event))
+                count += 1
                 if event.type == KEY_PRESS and event.xkey.keycode == self.space_keycode:
                     if (event.xkey.state & CONTROL_MASK) != 0:
                         self.logger.log("Ctrl+Space pressed; toggling off")
@@ -1497,8 +1536,10 @@ class X11HotkeyDaemon:
                 # report grab key as released even while physically held.
                 released_since = None
                 event = XEvent()
-                while self.libx11.XPending(self.display) > 0:
+                count = 0
+                while self.libx11.XPending(self.display) > 0 and count < 20:
                     self.libx11.XNextEvent(self.display, ctypes.byref(event))
+                    count += 1
                     if event.type == FOCUS_OUT:
                         self.logger.log("FocusOut detected during hold session; stopping")
                         key_released = True
