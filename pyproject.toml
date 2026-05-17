@@ -9,9 +9,9 @@ description = "Local X11 push-to-talk dictation powered by faster-whisper via Do
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT OR Apache-2.0"
-license-files = ["LICENSE", "LICENSE-MIT", "LICENSE-APACHE"]
+license-files = ["licenses/LICENSE", "licenses/LICENSE-MIT", "licenses/LICENSE-APACHE"]
 authors = [
-  { name = "Jon" }
+  { name = "Jon Penwood" }
 ]
 keywords = ["dictation", "whisper", "faster-whisper", "x11", "linux", "speech-to-text"]
 classifiers = [
