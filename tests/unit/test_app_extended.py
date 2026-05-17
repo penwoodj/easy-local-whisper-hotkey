@@ -166,7 +166,8 @@ class ParseArgsTests(unittest.TestCase):
     @patch.dict('os.environ', {}, clear=True)
     def test_parse_args_default_values(self) -> None:
         args = app.parse_args([])
-        self.assertTrue(args.whisper_cli.endswith("whisper-cli"))
+        # No hardcoded fallback - returns "." (empty Path) if whisper-cli not found
+        self.assertEqual(args.whisper_cli, ".")
         self.assertTrue(args.model.endswith("ggml-base.en.bin"))
         self.assertEqual(args.chunk_seconds, 3.5)
         self.assertEqual(args.overlap_seconds, 0.8)

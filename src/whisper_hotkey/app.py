@@ -30,7 +30,6 @@ except ImportError:
 
 HOME = Path.home()
 PACKAGE_NAME = "whisper-hotkey"
-LEGACY_WHISPER_CLI = HOME / "code/opencode-infinite/whisper.cpp/build/bin/whisper-cli"
 XDG_DATA_HOME = Path(os.environ.get("XDG_DATA_HOME", HOME / ".local/share"))
 DEFAULT_MODEL = XDG_DATA_HOME / PACKAGE_NAME / "models/ggml-base.en.bin"
 DEFAULT_LOG_FILE = Path("/tmp/whisper_hotkey.log")
@@ -89,7 +88,8 @@ def default_whisper_cli() -> Path:
     discovered = shutil_which("whisper-cli")
     if discovered:
         return Path(discovered)
-    return LEGACY_WHISPER_CLI
+    # No hardcoded fallback - use empty path to indicate not found
+    return Path()  # Empty Path, converts to "."
 
 
 def parse_preferred_sources(raw_value: str | None) -> list[str]:

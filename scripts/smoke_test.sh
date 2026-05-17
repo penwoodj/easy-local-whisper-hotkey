@@ -8,7 +8,8 @@ set -euo pipefail
 # Expects the audio to contain "testing testing one two three"
 
 AUDIO="${1:-/tmp/whisper_test_sample.wav}"
-VENV="/home/jon/code/easy-local-whisper-hotkey/.venv/bin/python"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+VENV="${REPO_ROOT}/.venv/bin/python"
 LOCK="/tmp/whisper_hotkey.lock"
 TIMEOUT=30
 
@@ -55,7 +56,7 @@ $VENV -c "
 import sys; sys.path.insert(0, 'src')
 from faster_whisper import WhisperModel
 model = WhisperModel('base.en', device='cpu', compute_type='int8',
-                     download_root='/home/jon/.config/com.pais.handy/models/')
+                     download_root='\${HOME}/.local/share/whisper-hotkey/models')
 print('faster-whisper loaded OK')
 " 2>&1 && pass "faster-whisper model" || fail "faster-whisper model (may need download)"
 
@@ -69,7 +70,7 @@ from faster_whisper import WhisperModel
 
 audio_path = '$AUDIO'
 model = WhisperModel('base.en', device='cpu', compute_type='int8',
-                     download_root='/home/jon/.config/com.pais.handy/models/')
+                     download_root='\${HOME}/.local/share/whisper-hotkey/models')
 
 # Read wav file
 with wave.open(audio_path, 'rb') as w:

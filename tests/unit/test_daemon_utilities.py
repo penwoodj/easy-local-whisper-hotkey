@@ -82,7 +82,8 @@ class DefaultWhisperCliTests(unittest.TestCase):
     @patch('whisper_hotkey.app.shutil_which', return_value='')
     def test_default_whisper_cli_fallback(self, _which) -> None:
         result = app.default_whisper_cli()
-        self.assertEqual(result, app.LEGACY_WHISPER_CLI)
+        # No hardcoded fallback - returns empty Path (".") when not found
+        self.assertEqual(result, Path())
 
 
 class NormalizeTokenTests(unittest.TestCase):

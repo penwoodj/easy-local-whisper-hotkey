@@ -28,7 +28,7 @@ docker compose up -d
 Install the CLI:
 
 ```bash
-pipx install easy-local-whisper-hotkey
+pipx install .
 ```
 
 Run dictation:
@@ -38,6 +38,13 @@ easy-local-whisper-hotkey run
 ```
 
 Press `Ctrl+Space` to record. The CLI connects to the inference server via `$XDG_RUNTIME_DIR/whisper/whisper.sock`.
+
+**Note:** For a one-command setup after cloning, run:
+```bash
+./scripts/setup.sh
+```
+
+This will create a virtual environment, install dependencies, copy `.env.example` to `.env`, create the socket directory, build and start the Docker container, and run diagnostics.
 
 ## Repository Layout
 

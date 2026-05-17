@@ -2,7 +2,8 @@
 set -euo pipefail
 
 AUDIO_FILE="${1:-/tmp/whisper_test_sample.wav}"
-VENV="/home/jon/code/easy-local-whisper-hotkey/.venv/bin/python"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+VENV="${REPO_ROOT}/.venv/bin/python"
 EXPECTED="testing testing one two three"
 THRESHOLD="${2:-0.7}"
 
@@ -26,7 +27,7 @@ from faster_whisper import WhisperModel
 
 audio_path = '$AUDIO_FILE'
 model = WhisperModel('base.en', device='cpu', compute_type='int8',
-                     download_root='/home/jon/.config/com.pais.handy/models/')
+                     download_root='\${HOME}/.local/share/whisper-hotkey/models')
 
 with wave.open(audio_path, 'rb') as w:
     frames = w.readframes(w.getnframes())

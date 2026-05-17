@@ -14,7 +14,7 @@ The Docker install path is the primary supported distribution method.
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/yourusername/easy-local-whisper-hotkey.git
+git clone https://github.com/penwoodj/easy-local-whisper-hotkey.git
 cd easy-local-whisper-hotkey
 ```
 
