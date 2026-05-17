@@ -1,0 +1,72 @@
+# Build stage
+FROM python:3.12-slim AS builder
+
+# Install build dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        build-essential \
+        git \
+        pkg-config \
+        ffmpeg \
+        libavcodec-dev \
+        libavformat-dev \
+        libavutil-dev \
+        libavdevice-dev \
+        libavfilter-dev \
+        libswresample-dev \
+        libswscale-dev \
+        && rm -rf /var/lib/apt/lists/*
+
+# Create virtualenv
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Copy requirements and install
+COPY packaging/docker/requirements.txt .
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
+
+# Pre-download model during build
+RUN python -c "from faster_whisper import WhisperModel; WhisperModel('base.en', device='cpu', compute_type='int8', download_root='/models')"
+
+# Runtime stage
+FROM python:3.12-slim
+
+# Set environment variables
+ENV WHISPER_SOCKET_PATH=/run/whisper/whisper.sock \
+    WHISPER_MODEL=base.en \
+    WHISPER_DEVICE=cpu \
+    WHISPER_COMPUTE_TYPE=int8 \
+    WHISPER_DOWNLOAD_ROOT=/models \
+    PATH="/opt/venv/bin:$PATH" \
+    PYTHONUNBUFFERED=1
+
+# Create runtime directories with permissions
+RUN mkdir -p /run/whisper /app /models && \
+    chown 1000:1000 /run/whisper /app /models
+
+# Copy installed packages from builder
+COPY --from=builder --chown=1000:1000 /opt/venv /opt/venv
+
+# Copy pre-downloaded models
+COPY --from=builder --chown=1000:1000 /models /models
+
+# Copy inference server (will be created in parallel)
+COPY --chown=1000:1000 src/whisper_hotkey/inference_server.py /app/inference_server.py
+
+# Create non-root user
+RUN groupadd -g 1000 whisper && \
+    useradd -r -u 1000 -g whisper whisper
+
+# Switch to non-root user
+USER whisper
+
+# Work directory
+WORKDIR /app
+
+# Health check - verify socket exists
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD test -S "$WHISPER_SOCKET_PATH" || exit 1
+
+# Entry point
+ENTRYPOINT ["python", "-u", "/app/inference_server.py"]
