@@ -18,5 +18,9 @@ COPY src /app/src
 RUN python -m pip install --upgrade pip \
     && python -m pip install .
 
+RUN useradd -m -u 1000 -s /bin/bash whisper
+USER whisper
+WORKDIR /home/whisper
+
 ENTRYPOINT ["/usr/bin/tini", "--", "whisper-hotkey"]
 CMD ["--version"]

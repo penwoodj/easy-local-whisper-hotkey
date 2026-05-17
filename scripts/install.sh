@@ -35,6 +35,7 @@ fi
 
 mkdir -p "$HOME/.config/systemd/user"
 mkdir -p "$HOME/.config/whisper-hotkey"
+chmod 700 "$HOME/.config/whisper-hotkey"
 mkdir -p "$HOME/.local/share/whisper-hotkey/models"
 
 cp "$ROOT_DIR/packaging/systemd/whisper-hotkey.service" "$HOME/.config/systemd/user/whisper-hotkey.service"

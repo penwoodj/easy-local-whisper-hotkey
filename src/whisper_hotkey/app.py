@@ -1,4 +1,5 @@
 import argparse
+import atexit
 import ctypes
 import fcntl
 import os
@@ -29,11 +30,10 @@ except ImportError:
 
 HOME = Path.home()
 PACKAGE_NAME = "whisper-hotkey"
-LEGACY_WHISPER_CLI = HOME / "code/opencode-infinite/whisper.cpp/build/bin/whisper-cli"
 XDG_DATA_HOME = Path(os.environ.get("XDG_DATA_HOME", HOME / ".local/share"))
 DEFAULT_MODEL = XDG_DATA_HOME / PACKAGE_NAME / "models/ggml-base.en.bin"
-DEFAULT_LOG_FILE = Path("/tmp/whisper_hotkey.log")
-LOCK_FILE = Path("/tmp/whisper_hotkey.lock")
+DEFAULT_LOG_FILE = Path(os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")) / "whisper_hotkey.log"
+LOCK_FILE = Path(os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")) / "whisper_hotkey.lock"
 DEFAULT_RAZER_SOURCE = "alsa_input.usb-Razer_Inc_Razer_Seiren_Mini_UC2148L03300931-00.mono-fallback"
 DEFAULT_WEBCAM_SOURCE = "alsa_input.usb-Anker_PowerConf_C200_Anker_PowerConf_C200_ACNV9P0C52101128-02.analog-stereo"
 DEFAULT_PREFERRED_SOURCES = [
@@ -83,11 +83,14 @@ def shutil_which(command: str) -> str:
 
 def default_whisper_cli() -> Path:
     if os.environ.get("WHISPER_CLI"):
-        return Path(os.environ["WHISPER_CLI"]).expanduser()
+        cli_path = Path(os.environ["WHISPER_CLI"]).expanduser()
+        if cli_path.is_file() and os.access(cli_path, os.X_OK):
+            return cli_path
+        return Path()
     discovered = shutil_which("whisper-cli")
     if discovered:
         return Path(discovered)
-    return LEGACY_WHISPER_CLI
+    return Path()
 
 
 def parse_preferred_sources(raw_value: str | None) -> list[str]:
@@ -100,12 +103,22 @@ class Logger:
     def __init__(self, path: Path):
         self.path = path
         self._lock = threading.Lock()
+        self._perms_set = False
+
+    def _ensure_permissions(self) -> None:
+        try:
+            os.chmod(self.path, 0o600)
+        except (OSError, FileNotFoundError):
+            pass
 
     def log(self, message: str) -> None:
         timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
         line = f"[{timestamp}] {message}\n"
         with self._lock:
             with self.path.open("a", encoding="utf-8") as handle:
+                if not self._perms_set:
+                    self._ensure_permissions()
+                    self._perms_set = True
                 handle.write(line)
 
 
@@ -115,10 +128,33 @@ class SingleInstance:
         self.handle = None
 
     def acquire(self) -> None:
-        self.handle = self.path.open("w")
+        if self.path.exists():
+            try:
+                test_fd = os.open(self.path, os.O_WRONLY)
+                try:
+                    fcntl.flock(test_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    fcntl.flock(test_fd, fcntl.LOCK_UN)
+                    os.close(test_fd)
+                    self.path.unlink()
+                except (OSError, IOError):
+                    os.close(test_fd)
+                    raise RuntimeError("another whisper daemon instance is already running") from None
+            except OSError:
+                raise RuntimeError("another whisper daemon instance is already running") from None
+
+        try:
+            fd = os.open(self.path, os.O_EXCL | os.O_CREAT | os.O_WRONLY, 0o600)
+            self.handle = os.fdopen(fd, "w")
+        except OSError as exc:
+            if exc.errno == 17:  # EEXIST
+                raise RuntimeError("another whisper daemon instance is already running") from None
+            raise
+
         try:
             fcntl.flock(self.handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
+            self.handle.close()
+            self.handle = None
             raise RuntimeError("another whisper daemon instance is already running") from None
         self.handle.write(f"{os.getpid()}\n")
         self.handle.flush()
@@ -441,6 +477,13 @@ class Recorder:
         fd, raw_path = tempfile.mkstemp(prefix="whisper_stream_", suffix=".s16le")
         os.close(fd)
         self.raw_path = Path(raw_path)
+        atexit.register(self._safe_cleanup)
+
+    def _safe_cleanup(self) -> None:
+        try:
+            self.raw_path.unlink()
+        except FileNotFoundError:
+            pass
 
     def start(self) -> None:
         command = [
@@ -1192,7 +1235,7 @@ class X11HotkeyDaemon:
 
         if processed != self._session_text:
             self.logger.log(f"Post-processing complete. Diff: {processed[:50]}...")
-            subprocess.run(["xdotool", "type", processed], check=True)
+            subprocess.run(["xdotool", "type", "--file", "-"], input=processed, text=True, check=True, timeout=10)
         else:
             self.logger.log("Post-processing: no changes made")
 
@@ -1540,7 +1583,18 @@ def ensure_dependencies(model: Path, whisper_cli: Path) -> None:
             raise RuntimeError(f"required command not found: {command}")
 
 
+def _cleanup_stale_temp_files() -> None:
+    temp_dir = Path(tempfile.gettempdir())
+    for pattern in ("whisper_stream_*.s16le", "whisper_chunk_*.wav"):
+        for path in temp_dir.glob(pattern):
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+
+
 def main(argv: Sequence[str] | None = None) -> int:
+    _cleanup_stale_temp_files()
     args = parse_args(argv)
     logger = Logger(Path(args.log_file).expanduser())
     whisper_cli = Path(args.whisper_cli).expanduser()

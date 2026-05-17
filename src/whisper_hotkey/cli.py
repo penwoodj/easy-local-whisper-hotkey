@@ -1,4 +1,5 @@
 import argparse
+import json
 import os
 import sys
 from pathlib import Path
@@ -6,6 +7,9 @@ from typing import Sequence
 
 from . import __version__
 from . import app
+
+
+ALLOWED_PREFIXES = ("WHISPER_",)
 
 
 def load_env_file(file_path: str) -> dict[str, str]:
@@ -16,9 +20,15 @@ def load_env_file(file_path: str) -> dict[str, str]:
             for line in f:
                 line = line.strip()
                 if not line or line.startswith('#'):
-                    if '=' in line:
-                        key, value = line.split('=', 1)
-                        env_vars[key.strip()] = value.strip()
+                    continue
+                if '=' not in line:
+                    continue
+                key, _, value = line.partition('=')
+                key = key.strip()
+                value = value.strip().strip('"').strip("'")
+                # Only allow WHISPER_ prefixed variables
+                if any(key.startswith(prefix) for prefix in ALLOWED_PREFIXES):
+                    env_vars[key] = value
     except FileNotFoundError:
         pass
     return env_vars

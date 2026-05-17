@@ -195,6 +195,9 @@ class PostProcessor:
                 if not api_key:
                     logger.warning("ANTHROPIC_API_KEY not set. Skipping agentic mode.")
                     return text
+                if not api_key.startswith("sk-ant-"):
+                    logger.warning("ANTHROPIC_API_KEY has unexpected format. Expected 'sk-ant-*'.")
+                    return text
 
                 self._anthropic_client = anthropic.Anthropic(api_key=api_key)
 
@@ -280,7 +283,7 @@ def install_deepmultilingualpunctuation() -> bool:
     """
     try:
         subprocess.run(
-            ["pip", "install", "deepmultilingualpunctuation", "-q"],
+            ["pip", "install", "deepmultilingualpunctuation>=0.1", "-q"],
             check=True,
             capture_output=True,
         )
@@ -300,7 +303,7 @@ def install_llama_cpp() -> bool:
     """
     try:
         subprocess.run(
-            ["pip", "install", "llama-cpp-python", "-q"],
+            ["pip", "install", "llama-cpp-python>=0.2", "-q"],
             check=True,
             capture_output=True,
         )
@@ -320,7 +323,7 @@ def install_anthropic() -> bool:
     """
     try:
         subprocess.run(
-            ["pip", "install", "anthropic", "-q"],
+            ["pip", "install", "anthropic>=0.30", "-q"],
             check=True,
             capture_output=True,
         )
