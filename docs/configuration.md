@@ -1,6 +1,6 @@
 # Configuration
 
-`whisper-hotkey` reads configuration from CLI flags first, then environment variables, then built-in defaults.
+`easy-local-whisper-hotkey` reads configuration from CLI flags first, then environment variables, then built-in defaults.
 
 ## Inference Mode
 

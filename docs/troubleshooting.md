@@ -33,8 +33,8 @@ Check:
 Use:
 
 ```bash
-whisper-hotkey list-sources
-whisper-hotkey print-config
+easy-local-whisper-hotkey list-sources
+easy-local-whisper-hotkey print-config
 ```
 
 Then set either:
@@ -47,8 +47,8 @@ Then set either:
 The current design buffers recognized chunks until release and types afterward to avoid interfering with the pressed-state check. If this regresses, collect:
 
 - `/tmp/whisper_hotkey.log`
-- `whisper-hotkey doctor --json`
-- `whisper-hotkey print-config --json`
+- `easy-local-whisper-hotkey doctor --json`
+- `easy-local-whisper-hotkey print-config --json`
 
 ## Service Starts But Fails At Login
 

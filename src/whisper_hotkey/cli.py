@@ -263,7 +263,7 @@ def command_doctor(namespace: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="whisper-hotkey",
-        description="Local X11 push-to-talk dictation powered by whisper.cpp.",
+        description="Local X11 push-to-talk dictation powered by faster-whisper.",
     )
     parser.add_argument(
         "--version",
