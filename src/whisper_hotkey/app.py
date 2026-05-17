@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Sequence
 
 from .postprocessor import PostProcessor, PostProcessMode, PostProcessTrigger
+from .inference_client import WhisperInferenceClient
 
 try:
     import numpy as np
@@ -609,6 +610,7 @@ class Transcriber(threading.Thread):
         symbol_words_to_symbols: bool = False,
         direct_streaming: bool = False,
         faster_whisper_model: WhisperModel | None = None,
+        inference_client: WhisperInferenceClient | None = None,
         on_text_typed: Callable[[str], None] | None = None,
     ):
         super().__init__(daemon=True)
@@ -625,6 +627,7 @@ class Transcriber(threading.Thread):
         self.symbol_words_to_symbols = symbol_words_to_symbols
         self.direct_streaming = direct_streaming
         self._fw_model = faster_whisper_model
+        self._inference_client = inference_client
         self._on_text_typed = on_text_typed
         self.jobs = queue.Queue(maxsize=8)
         self.history_words = []
@@ -663,6 +666,10 @@ class Transcriber(threading.Thread):
         pcm_data = self.recorder.read_segment(job.start, job.end)
         if len(pcm_data) < int(BYTES_PER_SECOND * 0.25):
             self.logger.log(f"Skipping tiny segment {job.index}: {len(pcm_data)} bytes")
+            return
+
+        if self._inference_client is not None:
+            self._process_inference_client(job, pcm_data)
             return
 
         if self._fw_model is not None:
@@ -717,6 +724,30 @@ class Transcriber(threading.Thread):
             self._type_text(append_text)
         else:
             self.logger.log(f"Buffered text chunk: {append_text!r}")
+            with self.pending_lock:
+                self.pending_fragments.append(append_text)
+        self.history_words.extend(append_text.split())
+        if len(self.history_words) > 64:
+            self.history_words = self.history_words[-64:]
+
+    def _process_inference_client(self, job: SegmentJob, pcm_data: bytes) -> None:
+        self.logger.log(f"Transcribing segment {job.index} via Docker inference")
+        transcript = self._inference_client.transcribe(pcm_data, self.language)
+        if not transcript:
+            self.logger.log(f"Segment {job.index}: empty transcript from inference client")
+            return
+        transcript = _STRIP_PUNCT_RE.sub("", transcript)
+        self.logger.log(f"Segment {job.index} final={job.final} text={transcript!r}")
+        if self._is_silence_hallucination(transcript):
+            self.logger.log(f"Segment {job.index}: filtered filler/hallucination")
+            return
+        append_text = compute_append_text(self.history_words, transcript)
+        if not append_text:
+            self.logger.log(f"Segment {job.index}: fully deduped")
+            return
+        if self.live_type or self.direct_streaming:
+            self._type_text(append_text)
+        else:
             with self.pending_lock:
                 self.pending_fragments.append(append_text)
         self.history_words.extend(append_text.split())
@@ -1042,6 +1073,7 @@ class X11HotkeyDaemon:
         activation_mode: str = "hold",
         indicator: bool = True,
         faster_whisper_model: WhisperModel | None = None,
+        inference_client: WhisperInferenceClient | None = None,
         postprocess_enabled: bool = False,
         postprocess_mode: str = "off",
         postprocess_trigger: str = "manual",
@@ -1062,6 +1094,7 @@ class X11HotkeyDaemon:
         self.activation_mode = activation_mode
         self.indicator = indicator
         self._fw_model = faster_whisper_model
+        self._inference_client = inference_client
         self._postprocessing_enabled = postprocess_enabled
         self._postprocessing_mode = postprocess_mode if postprocess_mode != "off" else "off"
         self._postprocessing_trigger = postprocess_trigger
@@ -1233,9 +1266,11 @@ class X11HotkeyDaemon:
             if self._caret_tracker:
                 self._caret_tracker.stop()
                 self._caret_tracker = None
-            if self._recorder:
+            if hasattr(self, '_recorder') and self._recorder:
                 self._recorder.stop()
                 self._recorder.cleanup()
+            if hasattr(self, '_inference_client') and self._inference_client:
+                self._inference_client.close()
             self.ungrab()
             self.libx11.XCloseDisplay(self.display)
             self.display = None
@@ -1514,6 +1549,7 @@ class X11HotkeyDaemon:
             symbol_words_to_symbols=self.symbol_words_to_symbols,
             direct_streaming=self.direct_streaming,
             faster_whisper_model=self._fw_model,
+            inference_client=self._inference_client,
             on_text_typed=self._on_text_typed,
         )
 
@@ -1615,6 +1651,7 @@ def run_once(
     symbol_words_to_symbols: bool = False,
     direct_streaming: bool = False,
     faster_whisper_model: WhisperModel | None = None,
+    inference_client: WhisperInferenceClient | None = None,
 ) -> int:
     logger.log(f"Running one-shot test for {duration_seconds:.2f}s")
     recorder = Recorder(source, logger)
@@ -1636,6 +1673,7 @@ def run_once(
         symbol_words_to_symbols=symbol_words_to_symbols,
         direct_streaming=direct_streaming,
         faster_whisper_model=faster_whisper_model,
+        inference_client=inference_client,
     )
     transcriber.start()
     transcriber.enqueue(SegmentJob(index=0, start=0, end=recorder.available(), final=True))
@@ -1674,6 +1712,24 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         ensure_dependencies(model, whisper_cli)
         source = resolve_audio_source_with_retry(args.source, preferred_sources, logger)
+
+        inference_client = None
+        socket_path = os.path.join(os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}"), "whisper", "whisper.sock")
+        if os.path.exists(socket_path):
+            try:
+                inference_client = WhisperInferenceClient(socket_path=socket_path)
+                result = inference_client.ping()
+                if result:
+                    logger.log(f"Docker inference client connected: {result}")
+                else:
+                    logger.log("Docker inference ping failed, falling back")
+                    inference_client = None
+            except Exception as e:
+                logger.log(f"Docker inference client failed: {e}")
+                inference_client = None
+        else:
+            logger.log("No Docker inference socket found, using local inference")
+
         if args.test is not None:
             return run_once(
                 whisper_cli=whisper_cli,
@@ -1689,6 +1745,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 symbol_words_to_symbols=args.symbol_words_to_symbols,
                 direct_streaming=args.direct_streaming,
                 faster_whisper_model=fw_model,
+                inference_client=inference_client,
             )
 
         instance = SingleInstance(LOCK_FILE)
@@ -1710,6 +1767,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             activation_mode=args.activation_mode,
             indicator=args.indicator,
             faster_whisper_model=fw_model,
+            inference_client=inference_client,
             postprocess_enabled=args.postprocess,
             postprocess_mode=args.postprocess_mode,
             postprocess_trigger=args.postprocess_trigger,
