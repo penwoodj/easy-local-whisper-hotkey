@@ -146,6 +146,18 @@ ruff format --check .
 mypy src
 ```
 
+## Security
+
+The application handles sensitive voice data. Key protections:
+
+- **Log files** are written to `$XDG_RUNTIME_DIR` (user-private, 0600 permissions). Speech transcripts are never world-readable.
+- **Lock file** uses `O_EXCL` to prevent symlink attacks.
+- **Temp audio files** are cleaned up via `atexit` handlers, even on crash.
+- **Docker container** is fully sandboxed: `network_mode=none`, `cap_drop=ALL`, `read_only`, non-root user, `no-new-privileges`.
+- **Inference socket** has 0600 permissions and is created under `$XDG_RUNTIME_DIR/whisper/` (0700 directory).
+- **Request validation**: 50MB size limit, JSON schema validation on socket messages.
+- **API keys**: `ANTHROPIC_API_KEY` validated for expected format before use.
+
 ## License
 
 Dual licensed under MIT OR Apache-2.0 at your option. See [licenses/](licenses/) for full text.
