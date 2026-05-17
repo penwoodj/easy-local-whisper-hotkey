@@ -2,15 +2,40 @@
 
 `whisper-hotkey` reads configuration from CLI flags first, then environment variables, then built-in defaults.
 
+## Inference Mode
+
+The tool supports two inference modes:
+
+1. **Docker inference** (default) — connects to a `faster-whisper` server via Unix socket
+2. **Native inference** (fallback) — calls `whisper-cli` from `whisper.cpp` directly
+
+If a socket is found at `$XDG_RUNTIME_DIR/whisper/whisper.sock`, Docker inference is used automatically. Otherwise, native `whisper-cli` is attempted.
+
+## Docker Inference Variables
+
+These configure the containerized `faster-whisper` server (set in `.env` or `docker-compose.yml`):
+
+| Variable | Default | Description |
+|---|---|---|
+| `WHISPER_MODEL` | `base.en` | Model size (base.en, small.en, medium.en, etc.) |
+| `WHISPER_DEVICE` | `cpu` | Compute device (`cpu` or `cuda`) |
+| `WHISPER_COMPUTE_TYPE` | `int8` | Quantization (`int8`, `float16`, `float32`) |
+| `WHISPER_SOCKET_PATH` | `/run/whisper/whisper.sock` | Socket path inside container |
+| `WHISPER_LANGUAGE` | `en` | Default transcription language |
+| `WHISPER_VAD_THRESHOLD` | `0.5` | Voice activity detection threshold |
+| `WHISPER_DOWNLOAD_ROOT` | `/models` | Model cache directory |
+
+The host CLI connects to the socket mounted at `$XDG_RUNTIME_DIR/whisper/whisper.sock`.
+
 ## Core Paths
 
-- `--whisper-cli` / `WHISPER_CLI`
-- `--model` / `WHISPER_MODEL`
-- `--log-file` / `WHISPER_LOG_FILE`
+- `--whisper-cli` / `WHISPER_CLI` — Path to `whisper-cli` binary (native mode only)
+- `--model` / `WHISPER_MODEL` — Path to GGML model file (native mode only)
+- `--log-file` / `WHISPER_LOG_FILE` — Log file path
 
 Defaults:
 
-- whisper CLI: `whisper-cli` on `PATH`, then the legacy local build path
+- whisper CLI: `whisper-cli` on `PATH`
 - model: `~/.local/share/whisper-hotkey/models/ggml-base.en.bin`
 - log: `/tmp/whisper_hotkey.log`
 
@@ -36,12 +61,7 @@ Format:
 source_one,source_two,source_three
 ```
 
-If neither is set, the default priority is:
-
-1. Razer Seiren Mini
-2. Anker PowerConf C200
-3. current desktop default source
-4. first capture-capable source
+If neither is set, the tool picks the first available capture source.
 
 ## Streaming Behavior
 
@@ -59,7 +79,7 @@ Recommended defaults:
 
 ## Service Environment File
 
-For the bundled user service, place overrides in:
+For the systemd user service, place overrides in:
 
 ```text
 ~/.config/whisper-hotkey/whisper-hotkey.env

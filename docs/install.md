@@ -1,8 +1,92 @@
 # Installation
 
-## Native Install
+## Docker Install (Recommended)
 
-The native install path is the primary supported distribution method.
+The Docker install path is the primary supported distribution method.
+
+### Prerequisites
+
+- Docker and Docker Compose installed
+- Linux host with X11
+- PipeWire or PulseAudio for audio
+- `xdotool` for typing
+
+### 1. Clone the Repository
+
+```bash
+git clone https://github.com/yourusername/easy-local-whisper-hotkey.git
+cd easy-local-whisper-hotkey
+```
+
+### 2. Build and Start the Inference Server
+
+```bash
+docker compose up -d
+```
+
+This command:
+- Builds the inference server container from `packaging/docker/Dockerfile.inference`
+- Pre-downloads the `base.en` faster-whisper model during the build
+- Starts the container listening on Unix socket at `$XDG_RUNTIME_DIR/whisper/whisper.sock`
+- Runs the container with strong security sandboxing: no network, read-only filesystem, no capabilities, non-root user
+
+The socket is shared via the volume mount `${XDG_RUNTIME_DIR}/whisper:/run/whisper`.
+
+### 3. Install the Host CLI
+
+```bash
+pipx install .
+```
+
+Or as a fallback:
+
+```bash
+pip install --user .
+```
+
+The console entry point is `easy-local-whisper-hotkey`.
+
+### 4. Verify the Installation
+
+```bash
+easy-local-whisper-hotkey doctor
+```
+
+This checks:
+- `xdotool` is available
+- `DISPLAY` is set
+- Audio sources are visible via PipeWire or PulseAudio
+- Docker inference server is reachable via the Unix socket
+
+### 5. Optional: Install Systemd User Service
+
+Create the user service directory and copy the service file:
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp packaging/systemd/easy-local-whisper-hotkey.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now easy-local-whisper-hotkey.service
+```
+
+This starts the application automatically on login.
+
+### Optional Docker Configuration
+
+Create a `.env` file in the repository root to customize the inference server:
+
+```bash
+WHISPER_MODEL=base.en
+WHISPER_DEVICE=cpu
+WHISPER_COMPUTE_TYPE=int8
+WHISPER_LANGUAGE=en
+```
+
+These settings configure the faster-whisper model used by the inference server.
+
+## Native Install (Advanced)
+
+The native install path uses whisper.cpp's `whisper-cli` directly on the host. No Docker needed, but you must build whisper.cpp yourself.
 
 ### 1. Install Runtime Dependencies
 
@@ -34,82 +118,34 @@ Or point `WHISPER_MODEL` at a different model path.
 
 ### 3. Install the Package
 
-Preferred:
-
 ```bash
-pipx install whisper-hotkey-<version>-py3-none-any.whl
+pipx install .
 ```
 
-Fallback:
+Or as a fallback:
 
 ```bash
-python3 -m pip install --user whisper-hotkey-<version>-py3-none-any.whl
+pip install --user .
 ```
 
 ### 4. Run Diagnostics
 
 ```bash
-whisper-hotkey doctor
+easy-local-whisper-hotkey doctor
 ```
 
-This should confirm:
-
+This confirms:
 - `whisper-cli` exists
-- the model file exists
+- The model file exists
 - `parec`, `pactl`, and `xdotool` are available
 - `DISPLAY` is set
-- at least one capture source is visible
+- At least one capture source is visible
 
-### 5. Install the User Service
-
-Copy the service file:
+### 5. Optional: Install Systemd User Service
 
 ```bash
 mkdir -p ~/.config/systemd/user
-cp packaging/systemd/whisper-hotkey.service ~/.config/systemd/user/
+cp packaging/systemd/easy-local-whisper-hotkey.service ~/.config/systemd/user/
 systemctl --user daemon-reload
-systemctl --user enable --now whisper-hotkey.service
+systemctl --user enable --now easy-local-whisper-hotkey.service
 ```
-
-### 6. Optional Environment File
-
-Create:
-
-```text
-~/.config/whisper-hotkey/whisper-hotkey.env
-```
-
-Example:
-
-```bash
-WHISPER_MODEL=/home/you/.local/share/whisper-hotkey/models/ggml-base.en.bin
-WHISPER_PREFERRED_SOURCES=alsa_input.usb-Razer_Inc_Razer_Seiren_Mini,alsa_input.usb-Anker_PowerConf
-WHISPER_LANGUAGE=en
-```
-
-## Docker Install
-
-The Docker image is for advanced users. Full desktop behavior still depends on host X11 and audio access.
-
-Typical considerations:
-
-- mount the X11 socket
-- pass `DISPLAY`
-- mount `XAUTHORITY`
-- expose host audio devices or PulseAudio/PipeWire socket
-- provide the model file
-
-Example shape:
-
-```bash
-docker run --rm \
-  -e DISPLAY \
-  -e XAUTHORITY=/tmp/.Xauthority \
-  -v "$XAUTHORITY:/tmp/.Xauthority:ro" \
-  -v /tmp/.X11-unix:/tmp/.X11-unix:ro \
-  -v "$HOME/.local/share/whisper-hotkey/models:/models:ro" \
-  whisper-hotkey:latest \
-  doctor --model /models/ggml-base.en.bin
-```
-
-For most users, native install is the right answer.
