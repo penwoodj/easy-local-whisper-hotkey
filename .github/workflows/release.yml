@@ -95,7 +95,7 @@ jobs:
         run: |
           IMAGE_NAME="$(echo "ghcr.io/${{ github.repository }}" | tr '[:upper:]' '[:lower:]')"
           VERSION="${{ needs.build-release.outputs.version }}"
-          docker build -f packaging/docker/Dockerfile -t "${IMAGE_NAME}:${VERSION}" -t "${IMAGE_NAME}:latest" .
+          docker build -f packaging/docker/Dockerfile.inference -t "${IMAGE_NAME}:${VERSION}" -t "${IMAGE_NAME}:latest" .
           docker push "${IMAGE_NAME}:${VERSION}"
           docker push "${IMAGE_NAME}:latest"
 

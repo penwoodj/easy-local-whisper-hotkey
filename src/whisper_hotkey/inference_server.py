@@ -35,6 +35,8 @@ CONFIG = {
     "download_root": os.getenv("WHISPER_DOWNLOAD_ROOT", "/models"),
 }
 
+MAX_MESSAGE_SIZE = 50 * 1024 * 1024  # 50MB max
+
 shutdown_event = threading.Event()
 
 
@@ -57,6 +59,9 @@ def recv_json(sock: socket.socket) -> dict | None:
         if len(header) < 4:
             return None
         msg_len = struct.unpack(">I", header)[0]
+        if msg_len > MAX_MESSAGE_SIZE:
+            log(f"Rejecting oversized message: {msg_len} bytes (max {MAX_MESSAGE_SIZE})")
+            return None
         payload = b""
         while len(payload) < msg_len:
             chunk = sock.recv(min(4096, msg_len - len(payload)))
@@ -87,16 +92,28 @@ def handle_connection(sock: socket.socket, model: WhisperModel) -> None:
             log(f"Connection: no request received ({_time.monotonic()-t0:.2f}s)")
             return
 
-        if request.get("action") == "ping":
+        if not isinstance(request, dict):
+            send_json(sock, {"error": "invalid request format"})
+            return
+
+        action = request.get("action")
+        if action == "ping":
             send_json(sock, {"status": "ok", "model": CONFIG["model"]})
             log(f"Ping answered ({_time.monotonic()-t0:.2f}s)")
             return
 
+        # Validate transcription request
         audio_b64 = request.get("audio")
         language = request.get("language", CONFIG["language"])
 
-        if not audio_b64:
-            send_json(sock, {"error": "missing audio field"})
+        # Validate audio field
+        if not audio_b64 or not isinstance(audio_b64, str):
+            send_json(sock, {"error": "missing or invalid audio field"})
+            return
+
+        # Validate language field if provided
+        if language and (not isinstance(language, str) or len(language) > 10):
+            send_json(sock, {"error": "invalid language field"})
             return
 
         audio_bytes = base64.b64decode(audio_b64)
@@ -169,6 +186,12 @@ def main() -> None:
     log(f"Model loaded. Listening on {CONFIG['socket_path']}")
 
     socket_path = Path(CONFIG["socket_path"])
+
+    # Validate socket path is absolute and under /run/ or /tmp/
+    if not str(socket_path).startswith(("/run/", "/tmp/")):
+        log(f"ERROR: Invalid socket path: {socket_path}. Must be under /run/ or /tmp/")
+        sys.exit(1)
+
     socket_path.parent.mkdir(parents=True, exist_ok=True)
 
     if socket_path.exists():

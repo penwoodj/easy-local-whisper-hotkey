@@ -145,7 +145,7 @@ class InstallDeepmultilingualpunctuationTests(unittest.TestCase):
 
         self.assertTrue(result)
         mock_run.assert_called_once_with(
-            ["pip", "install", "deepmultilingualpunctuation", "-q"],
+            ["pip", "install", "deepmultilingualpunctuation>=0.1", "-q"],
             check=True,
             capture_output=True,
         )
@@ -175,7 +175,7 @@ class InstallLlamaCppTests(unittest.TestCase):
 
         self.assertTrue(result)
         mock_run.assert_called_once_with(
-            ["pip", "install", "llama-cpp-python", "-q"],
+            ["pip", "install", "llama-cpp-python>=0.2", "-q"],
             check=True,
             capture_output=True,
         )
@@ -205,7 +205,7 @@ class InstallAnthropicTests(unittest.TestCase):
 
         self.assertTrue(result)
         mock_run.assert_called_once_with(
-            ["pip", "install", "anthropic", "-q"],
+            ["pip", "install", "anthropic>=0.30", "-q"],
             check=True,
             capture_output=True,
         )

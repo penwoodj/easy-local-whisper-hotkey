@@ -15,7 +15,7 @@ class WhisperInferenceClient:
         logger: Optional[logging.Logger] = None,
     ):
         self.socket_path = socket_path or os.path.join(
-            os.environ.get("XDG_RUNTIME_DIR", "/run/user/1000"),
+            os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}"),
             "whisper",
             "whisper.sock",
         )

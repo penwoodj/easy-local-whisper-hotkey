@@ -98,6 +98,7 @@ mkdir -p "$SOCKET_DIR" || {
     echo "ERROR: Failed to create $SOCKET_DIR"
     exit 1
 }
+chmod 700 "$SOCKET_DIR"
 echo "  ✓ socket directory created"
 
 # Build and start Docker container

@@ -55,6 +55,7 @@ setup: ## First-time setup: create venv, install deps, copy .env, create socket 
 	@echo ""
 	@echo "Creating socket directory at $(SOCKET_DIR)..."
 	@mkdir -p "$(SOCKET_DIR)" || { echo "ERROR: Failed to create $(SOCKET_DIR)"; exit 1; }
+	@chmod 700 "$(SOCKET_DIR)"
 	@echo "  ✓ socket directory created"
 	@echo ""
 	@echo "Building and starting Docker container..."

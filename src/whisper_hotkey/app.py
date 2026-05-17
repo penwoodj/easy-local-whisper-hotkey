@@ -13,6 +13,7 @@ import tempfile
 import threading
 import time
 import wave
+import atexit
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
@@ -32,8 +33,8 @@ HOME = Path.home()
 PACKAGE_NAME = "whisper-hotkey"
 XDG_DATA_HOME = Path(os.environ.get("XDG_DATA_HOME", HOME / ".local/share"))
 DEFAULT_MODEL = XDG_DATA_HOME / PACKAGE_NAME / "models/ggml-base.en.bin"
-DEFAULT_LOG_FILE = Path("/tmp/whisper_hotkey.log")
-LOCK_FILE = Path("/tmp/whisper_hotkey.lock")
+DEFAULT_LOG_FILE = Path(os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")) / "whisper_hotkey.log"
+LOCK_FILE = Path(os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")) / "whisper_hotkey.lock"
 DEFAULT_RAZER_SOURCE = "alsa_input.usb-Razer_Inc_Razer_Seiren_Mini_UC2148L03300931-00.mono-fallback"
 DEFAULT_WEBCAM_SOURCE = "alsa_input.usb-Anker_PowerConf_C200_Anker_PowerConf_C200_ACNV9P0C52101128-02.analog-stereo"
 DEFAULT_PREFERRED_SOURCES = [
@@ -102,12 +103,30 @@ class Logger:
     def __init__(self, path: Path):
         self.path = path
         self._lock = threading.Lock()
+        self._permissions_checked = False
+
+    def _ensure_permissions(self) -> None:
+        if self._permissions_checked:
+            return
+        try:
+            if self.path.exists():
+                current_perms = self.path.stat().st_mode & 0o777
+                if current_perms != 0o600:
+                    self.path.chmod(0o600)
+            else:
+                # Create with restrictive permissions
+                fd = os.open(str(self.path), os.O_CREAT | os.O_WRONLY, 0o600)
+                os.close(fd)
+            self._permissions_checked = True
+        except OSError:
+            pass
 
     def log(self, message: str) -> None:
         timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
         line = f"[{timestamp}] {message}\n"
         with self._lock:
             try:
+                self._ensure_permissions()
                 with self.path.open("a", encoding="utf-8") as handle:
                     handle.write(line)
             except OSError:
@@ -120,10 +139,32 @@ class SingleInstance:
         self.handle = None
 
     def acquire(self) -> None:
-        self.handle = self.path.open("w")
+        # Remove stale lock file (only if regular file, not symlink, and unlocked)
+        if self.path.exists() and self.path.is_file() and not self.path.is_symlink():
+            try:
+                # Try to acquire the lock to see if another instance is running
+                test_handle = self.path.open("r")
+                try:
+                    fcntl.flock(test_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    # If we got the lock, the file is stale (no other instance holding it)
+                    test_handle.close()
+                    self.path.unlink()
+                except OSError:
+                    # Another instance is holding the lock
+                    test_handle.close()
+                    raise RuntimeError("another whisper daemon instance is already running") from None
+            except (OSError, RuntimeError):
+                pass
+        # Create with O_EXCL to prevent symlink attacks
+        try:
+            fd = os.open(str(self.path), os.O_EXCL | os.O_CREAT | os.O_WRONLY, 0o600)
+        except FileExistsError:
+            raise RuntimeError("another whisper daemon instance is already running") from None
+        self.handle = os.fdopen(fd, "w")
         try:
             fcntl.flock(self.handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
+            self.handle.close()
             raise RuntimeError("another whisper daemon instance is already running") from None
         self.handle.write(f"{os.getpid()}\n")
         self.handle.flush()
@@ -511,6 +552,14 @@ class Recorder:
         fd, raw_path = tempfile.mkstemp(prefix="whisper_stream_", suffix=".s16le")
         os.close(fd)
         self.raw_path = Path(raw_path)
+        # Ensure cleanup even on crash
+        atexit.register(self._safe_cleanup)
+
+    def _safe_cleanup(self) -> None:
+        try:
+            self.raw_path.unlink()
+        except (FileNotFoundError, OSError):
+            pass
 
     def start(self) -> None:
         command = [
@@ -1362,12 +1411,13 @@ class X11HotkeyDaemon:
 
     def _cleanup_stale_temp_files(self) -> None:
         import glob
-        for path in glob.glob("/tmp/whisper_stream_*.s16le"):
-            try:
-                Path(path).unlink()
-                self.logger.log(f"Cleaned up stale temp file: {path}")
-            except Exception:
-                pass
+        for pattern in ["/tmp/whisper_stream_*.s16le", "/tmp/whisper_chunk_*.wav"]:
+            for path in glob.glob(pattern):
+                try:
+                    Path(path).unlink()
+                    self.logger.log(f"Cleaned up stale temp file: {path}")
+                except Exception:
+                    pass
 
     def run(self) -> None:
         self.open()
