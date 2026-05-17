@@ -8,8 +8,8 @@ dynamic = ["version"]
 description = "Local X11 push-to-talk dictation powered by faster-whisper via Docker."
 readme = "README.md"
 requires-python = ">=3.11"
-license = "MIT"
-license-files = ["LICENSE"]
+license = "MIT OR Apache-2.0"
+license-files = ["LICENSE", "LICENSE-MIT", "LICENSE-APACHE"]
 authors = [
   { name = "Jon" }
 ]
